@@ -33,6 +33,32 @@ Password: admin123
 npm run build
 ```
 
+## Build Installer untuk Klien
+
+```bash
+npm run dist
+```
+
+Output installer ada di:
+
+```text
+release/Selling Apps Setup 0.1.0.exe
+```
+
+File tersebut yang diberikan ke klien. Setelah install, aplikasi bisa dibuka dari desktop shortcut atau Start Menu. Database SQLite tetap tersimpan lokal di komputer klien dan bisa dilihat dari menu **Settings > GDrive Backup** pada bagian lokasi database.
+
+Untuk build folder tanpa installer:
+
+```bash
+npm run dist:dir
+```
+
+Output-nya ada di:
+
+```text
+release/win-unpacked/Selling Apps.exe
+```
+
 ## Struktur Project
 
 ```text
@@ -58,3 +84,7 @@ npm run rebuild:native
 ```
 
 Project memakai `electron@37.x` agar kompatibilitas native module lebih stabil.
+
+## Icon Aplikasi
+
+Logo source ada di `src/renderer/src/assets/tracker.png`. Saat build produksi, script `npm run make:icon` otomatis membuat `build/icon.ico` untuk icon desktop dan installer.

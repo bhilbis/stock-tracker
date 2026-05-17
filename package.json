@@ -1,0 +1,78 @@
+{
+  "name": "selling-apps",
+  "version": "0.1.0",
+  "description": "Aplikasi desktop manajemen stok lokal offline-first berbasis Electron, React, Tailwind, dan SQLite.",
+  "main": "out/main/index.js",
+  "type": "module",
+  "private": true,
+  "author": "Selling Apps",
+  "scripts": {
+    "dev": "node scripts/run-with-electron-env.mjs electron-vite dev",
+    "build": "node scripts/run-with-electron-env.mjs electron-vite build",
+    "preview": "node scripts/run-with-electron-env.mjs electron-vite preview",
+    "dist": "npm run make:icon && npm run rebuild:native && npm run build && electron-builder --win nsis",
+    "dist:dir": "npm run make:icon && npm run rebuild:native && npm run build && electron-builder --win dir",
+    "lint:js": "node --check electron.vite.config.js && node --check src/main/index.js && node --check src/preload/index.js",
+    "make:icon": "node scripts/make-icon.mjs",
+    "rebuild:native": "node scripts/run-with-electron-env.mjs electron-rebuild -f -w better-sqlite3"
+  },
+  "build": {
+    "appId": "com.sellingapps.inventory",
+    "productName": "Selling Apps",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Selling Apps"
+    }
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "electron-store": "^11.0.2",
+    "exceljs": "^4.4.0",
+    "googleapis": "^171.4.0",
+    "lucide-react": "^1.16.0",
+    "papaparse": "^5.5.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "recharts": "^3.8.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@tailwindcss/vite": "^4.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^37.10.3",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
+    "png-to-ico": "^3.0.1",
+    "tailwindcss": "^4.3.0",
+    "vite": "^7.3.3"
+  }
+}

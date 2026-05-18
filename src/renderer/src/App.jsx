@@ -5,8 +5,10 @@ import {
   CloudUpload,
   Download,
   FileSpreadsheet,
+  Loader2,
   LogOut,
   PackageSearch,
+  RefreshCw,
   Store,
   Settings,
   X,
@@ -286,7 +288,7 @@ function InventoryPage({ onNotify }) {
           </Button>
         </div>
       </Card>
-      <Table columns={columns} rows={filteredItems} getRowKey={(row) => row.item_code} />
+      <Table columns={columns} rows={filteredItems} getRowKey={(row) => row.item_code} emptyMessage="Belum ada data stok gudang." />
       {showStockIn ? (
         <StockInModal
           onNotify={onNotify}
@@ -315,17 +317,40 @@ function InventoryPage({ onNotify }) {
 function DashboardPage() {
   const [logs, setLogs] = useState([])
   const [storePerformance, setStorePerformance] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  async function loadDashboard() {
+    setLoading(true)
+    try {
+      const [nextLogs, nextStorePerformance] = await Promise.all([
+        window.api.logs.list({ mutationType: 'ALL' }),
+        window.api.stores.performance({})
+      ])
+      setLogs(nextLogs)
+      setStorePerformance(nextStorePerformance)
+    } catch {
+      setLogs([])
+      setStorePerformance([])
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    window.api.logs.list({ mutationType: 'ALL' }).then(setLogs).catch(() => setLogs([]))
-    window.api.stores.performance({}).then(setStorePerformance).catch(() => setStorePerformance([]))
+    loadDashboard()
   }, [])
 
   const summary = useMemo(() => buildSummary(logs), [logs])
 
   return (
     <div className="space-y-6">
-      <PageTitle title="Dashboard" description="Ringkasan stok masuk, stok keluar, dan omzet." />
+      <div className="flex items-start justify-between gap-4">
+        <PageTitle title="Dashboard" description="Ringkasan stok masuk, stok keluar, dan omzet." />
+        <Button variant="ghost" onClick={loadDashboard} disabled={loading}>
+          <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+          Refresh
+        </Button>
+      </div>
       <div className="grid grid-cols-3 gap-4">
         <MetricCard label="Barang Masuk" value={summary.totalIn} />
         <MetricCard label="Barang Keluar" value={summary.totalOut} />
@@ -334,7 +359,7 @@ function DashboardPage() {
       <Card>
         <div className="space-y-4">
           <h3 className="font-semibold">Tren Barang Keluar Harian</h3>
-          <div className="h-72">
+          <ChartFrame loading={loading} empty={summary.chartRows.length === 0} emptyMessage="Belum ada mutasi keluar untuk ditampilkan.">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={summary.chartRows}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -344,13 +369,13 @@ function DashboardPage() {
                 <Bar dataKey="qty" fill="var(--color-brand-primary)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </ChartFrame>
         </div>
       </Card>
       <Card>
         <div className="space-y-4">
           <h3 className="font-semibold">Performa Toko Teratas</h3>
-          <div className="h-80">
+          <ChartFrame loading={loading} empty={storePerformance.length === 0} emptyMessage="Belum ada performa toko untuk ditampilkan.">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={storePerformance}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -360,7 +385,7 @@ function DashboardPage() {
                 <Bar dataKey="qty" fill="var(--color-brand-secondary)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </ChartFrame>
         </div>
       </Card>
     </div>
@@ -371,9 +396,17 @@ function StoresPage({ onNotify }) {
   const [stores, setStores] = useState([])
   const [form, setForm] = useState({ ownerName: '', storeName: '', phoneNumber: '' })
   const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(true)
 
   async function loadStores() {
-    setStores(await window.api.stores.list())
+    setLoading(true)
+    try {
+      setStores(await window.api.stores.list())
+    } catch (err) {
+      onNotify('error', getUserErrorMessage(err))
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -405,7 +438,13 @@ function StoresPage({ onNotify }) {
 
   return (
     <div className="space-y-6">
-      <PageTitle title="Toko" description="Kelola data owner, nama toko, dan nomor handphone." />
+      <div className="flex items-start justify-between gap-4">
+        <PageTitle title="Toko" description="Kelola data owner, nama toko, dan nomor handphone." />
+        <Button variant="ghost" onClick={loadStores} disabled={loading}>
+          <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+          Refresh
+        </Button>
+      </div>
       <Card>
         <form className="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-4" onSubmit={submit}>
           <Field label="Owner Name">
@@ -423,7 +462,7 @@ function StoresPage({ onNotify }) {
         </form>
       </Card>
       {message ? <p className="text-sm text-brand-secondary">{message}</p> : null}
-      <Table columns={columns} rows={stores} getRowKey={(row) => row.id} />
+      <Table columns={columns} rows={stores} getRowKey={(row) => row.id} loading={loading} emptyMessage="Belum ada data toko." />
     </div>
   )
 }
@@ -765,9 +804,17 @@ function LogsPage({ onNotify, onConfirm }) {
   const [pageSize, setPageSize] = useState(10)
   const [showMutationForm, setShowMutationForm] = useState(false)
   const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(true)
 
   async function loadLogs(nextFilters = filters) {
-    setLogs(await window.api.logs.list(nextFilters))
+    setLoading(true)
+    try {
+      setLogs(await window.api.logs.list(nextFilters))
+    } catch (err) {
+      onNotify('error', getUserErrorMessage(err))
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -775,7 +822,8 @@ function LogsPage({ onNotify, onConfirm }) {
     loadLogs(filters)
   }, [filters.mutationType, filters.fromDate, filters.toDate])
 
-  const paginatedLogs = paginateRows(logs, page, pageSize)
+  const activeLogs = logs.filter((log) => !log.canceled_at)
+  const paginatedLogs = paginateRows(activeLogs, page, pageSize)
 
   async function exportExcel() {
     setMessage('')
@@ -831,6 +879,7 @@ function LogsPage({ onNotify, onConfirm }) {
                   throw new Error('Aplikasi perlu direstart agar fitur batal mutasi aktif.')
                 }
                 await window.api.inventory.cancelStockOut({ logId: row.id, reason: result.value })
+                setLogs((currentLogs) => currentLogs.filter((log) => log.id !== row.id))
                 onNotify('success', 'Mutasi berhasil dibatalkan dan stok dikembalikan.')
                 await loadLogs()
               } catch (err) {
@@ -853,6 +902,10 @@ function LogsPage({ onNotify, onConfirm }) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="font-semibold">Laporan Mutasi</h3>
             <div className="flex flex-wrap gap-2">
+              <Button variant="ghost" onClick={() => loadLogs()} disabled={loading}>
+                <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+                Refresh
+              </Button>
               <Button onClick={() => setShowMutationForm((value) => !value)}>
                 <Upload size={18} />
                 {showMutationForm ? 'Tutup Mutasi' : 'Tambah Mutasi'}
@@ -895,11 +948,11 @@ function LogsPage({ onNotify, onConfirm }) {
         />
       ) : null}
       {message ? <p className="text-sm text-brand-secondary">{message}</p> : null}
-      <Table columns={columns} rows={paginatedLogs} getRowKey={(row) => row.id} />
+      <Table columns={columns} rows={paginatedLogs} getRowKey={(row) => row.id} loading={loading} emptyMessage="Belum ada mutasi stok sesuai filter." />
       <PaginationControls
         page={page}
         pageSize={pageSize}
-        totalRows={logs.length}
+        totalRows={activeLogs.length}
         onPageChange={setPage}
         onPageSizeChange={(nextSize) => {
           setPageSize(nextSize)
@@ -919,6 +972,8 @@ function SettingsPage({ onNotify, onConfirm }) {
   const [systemPage, setSystemPage] = useState(1)
   const [systemPageSize, setSystemPageSize] = useState(10)
   const [message, setMessage] = useState('')
+  const [backupLoading, setBackupLoading] = useState(false)
+  const [restoreLoading, setRestoreLoading] = useState(false)
 
   useEffect(() => {
     window.api.settings.get().then((data) => {
@@ -959,6 +1014,7 @@ function SettingsPage({ onNotify, onConfirm }) {
   }
 
   async function backupNow() {
+    setBackupLoading(true)
     try {
       const result = await window.api.settings.backupNow()
       const message = result.mode === 'updated' ? 'Backup berhasil meng-update file lama di Google Drive.' : 'Backup pertama berhasil dibuat di Google Drive.'
@@ -966,6 +1022,8 @@ function SettingsPage({ onNotify, onConfirm }) {
       onNotify('success', message)
     } catch (err) {
       onNotify('error', getUserErrorMessage(err))
+    } finally {
+      setBackupLoading(false)
     }
   }
 
@@ -978,12 +1036,14 @@ function SettingsPage({ onNotify, onConfirm }) {
       tone: 'danger'
     })
     if (!result.confirmed) return
+    setRestoreLoading(true)
     try {
       setMessage('Restore berjalan. Aplikasi akan restart setelah selesai.')
       onNotify('warning', 'Restore berjalan. Aplikasi akan restart setelah selesai.')
       await window.api.settings.restoreFromDrive()
     } catch (err) {
       onNotify('error', getUserErrorMessage(err))
+      setRestoreLoading(false)
     }
   }
 
@@ -1001,6 +1061,8 @@ function SettingsPage({ onNotify, onConfirm }) {
 
   return (
     <div className="space-y-6">
+      {backupLoading ? <ActionLoadingOverlay title="Backup ke Google Drive" description="Database sedang disiapkan dan diunggah. Jangan tutup aplikasi." /> : null}
+      {restoreLoading ? <ActionLoadingOverlay title="Restore dari Google Drive" description="Backup sedang diunduh, divalidasi, lalu aplikasi akan restart." /> : null}
       <PageTitle title="Pengaturan" description="Kelola backup Google Drive dan audit log system." />
       <Card>
         <div className="space-y-5">
@@ -1026,11 +1088,12 @@ function SettingsPage({ onNotify, onConfirm }) {
               <div className="flex flex-wrap gap-3 pt-2">
                 <Button onClick={saveCredentials}>Simpan Credential</Button>
                 <Button variant="secondary" onClick={connectDrive}>Hubungkan Google Drive</Button>
-                <Button variant="secondary" onClick={backupNow} disabled={!settings.hasGoogleRefreshToken}>
-                  <CloudUpload size={18} />
+                <Button variant="secondary" onClick={backupNow} disabled={!settings.hasGoogleRefreshToken || backupLoading || restoreLoading}>
+                  {backupLoading ? <Loader2 size={18} className="animate-spin" /> : <CloudUpload size={18} />}
                   Backup Sekarang
                 </Button>
-                <Button variant="danger" onClick={restoreFromDrive} disabled={!settings.hasGoogleRefreshToken}>
+                <Button variant="danger" onClick={restoreFromDrive} disabled={!settings.hasGoogleRefreshToken || backupLoading || restoreLoading}>
+                  {restoreLoading ? <Loader2 size={18} className="animate-spin" /> : null}
                   Restore dari GDrive
                 </Button>
               </div>
@@ -1039,11 +1102,14 @@ function SettingsPage({ onNotify, onConfirm }) {
                   type="checkbox"
                   checked={settings.googleDriveBackupEnabled}
                   onChange={async (e) => {
+                    const checked = e.target.checked
+                    const previousSettings = settings
+                    setSettings({ ...settings, googleDriveBackupEnabled: checked })
                     try {
-                      await window.api.settings.setAutoBackup(e.target.checked)
-                      setSettings({ ...settings, googleDriveBackupEnabled: e.target.checked })
-                      onNotify('success', e.target.checked ? 'Auto-backup diaktifkan.' : 'Auto-backup dinonaktifkan.')
+                      await window.api.settings.setAutoBackup(checked)
+                      onNotify('success', checked ? 'Auto-backup diaktifkan.' : 'Auto-backup dinonaktifkan.')
                     } catch (err) {
+                      setSettings(previousSettings)
                       onNotify('error', getUserErrorMessage(err))
                     }
                   }}
@@ -1067,7 +1133,7 @@ function SettingsPage({ onNotify, onConfirm }) {
                   Refresh
                 </Button>
               </div>
-              <Table columns={systemColumns} rows={paginatedSystemLogs} getRowKey={(row) => row.id} />
+              <Table columns={systemColumns} rows={paginatedSystemLogs} getRowKey={(row) => row.id} emptyMessage="Belum ada log system sesuai filter." />
               <PaginationControls
                 page={systemPage}
                 pageSize={systemPageSize}
@@ -1124,6 +1190,45 @@ function MetricCard({ label, value }) {
       <p className="text-sm text-ui-muted">{label}</p>
       <p className="mt-2 text-3xl font-semibold">{value}</p>
     </Card>
+  )
+}
+
+function ChartFrame({ loading, empty, emptyMessage, children }) {
+  return (
+    <div className="relative h-72 overflow-hidden rounded-ui border border-ui-border bg-ui-surface">
+      {loading ? (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-white/70 backdrop-blur-[1px]">
+          <div className="flex items-center gap-3 rounded-ui border border-ui-border bg-ui-surface px-4 py-3 text-sm text-ui-muted shadow-ui">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-brand-primary/25 border-t-brand-primary" />
+            Memuat data...
+          </div>
+        </div>
+      ) : null}
+      {!loading && empty ? (
+        <div className="grid h-full place-items-center px-4 text-center text-sm text-ui-muted">
+          {emptyMessage}
+        </div>
+      ) : (
+        children
+      )}
+    </div>
+  )
+}
+
+function ActionLoadingOverlay({ title, description }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/45 p-6 backdrop-blur-sm">
+      <div className="w-full max-w-sm rounded-ui border border-ui-border bg-ui-surface p-6 text-center shadow-ui">
+        <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-brand-primary/10 text-brand-primary">
+          <Loader2 size={30} className="animate-spin" />
+        </div>
+        <h3 className="mt-4 text-lg font-semibold">{title}</h3>
+        <p className="mt-2 text-sm leading-6 text-ui-muted">{description}</p>
+        <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-ui-bg">
+          <div className="h-full w-1/2 animate-pulse rounded-full bg-brand-primary" />
+        </div>
+      </div>
+    </div>
   )
 }
 

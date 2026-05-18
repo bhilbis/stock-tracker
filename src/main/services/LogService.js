@@ -4,7 +4,7 @@ export class LogService {
   }
 
   listLogs(filters = {}) {
-    const conditions = []
+    const conditions = ['stock_logs.canceled_at IS NULL']
     const params = {}
 
     if (filters.mutationType && filters.mutationType !== 'ALL') {

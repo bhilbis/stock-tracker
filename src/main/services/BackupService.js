@@ -1,8 +1,9 @@
-import { copyFileSync, createReadStream, createWriteStream, existsSync, renameSync, unlinkSync } from 'node:fs'
+import { copyFileSync, createReadStream, createWriteStream, existsSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import Database from 'better-sqlite3'
 import { google } from 'googleapis'
 
 const require = createRequire(import.meta.url)
@@ -12,11 +13,14 @@ const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata'
 const BACKUP_FILE_NAME = 'selling-apps-data.sqlite'
 const REDIRECT_PORT = 53682
 const REDIRECT_URI = `http://127.0.0.1:${REDIRECT_PORT}/oauth2callback`
+const OAUTH_TIMEOUT_MS = 5 * 60 * 1000
+const REQUIRED_TABLES = ['inventory', 'stores', 'stock_logs', 'inventory_lots', 'users', 'system_logs']
 
 export class BackupService {
-  constructor(store, dbPath) {
+  constructor(store, dbPath, databaseConnection) {
     this.store = store
     this.dbPath = dbPath
+    this.databaseConnection = databaseConnection
   }
 
   getStatus() {
@@ -61,30 +65,36 @@ export class BackupService {
     oauth2Client.setCredentials({ refresh_token: this.store.get('googleRefreshToken') })
     const drive = google.drive({ version: 'v3', auth: oauth2Client })
     const existingFileId = await this.findExistingBackupFile(drive)
-    const media = {
-      mimeType: 'application/x-sqlite3',
-      body: createReadStream(this.dbPath)
-    }
+    const snapshot = await this.createBackupSnapshot()
 
-    if (existingFileId) {
-      const response = await drive.files.update({
-        fileId: existingFileId,
+    try {
+      const media = {
+        mimeType: 'application/x-sqlite3',
+        body: createReadStream(snapshot.path)
+      }
+
+      if (existingFileId) {
+        const response = await drive.files.update({
+          fileId: existingFileId,
+          media,
+          fields: 'id,name,modifiedTime,size'
+        })
+        return { ok: true, mode: 'updated', file: response.data, snapshotSize: snapshot.size }
+      }
+
+      const response = await drive.files.create({
+        requestBody: {
+          name: BACKUP_FILE_NAME,
+          parents: ['appDataFolder']
+        },
         media,
-        fields: 'id,name,modifiedTime'
+        fields: 'id,name,modifiedTime,size'
       })
-      return { ok: true, mode: 'updated', file: response.data }
+
+      return { ok: true, mode: 'created', file: response.data, snapshotSize: snapshot.size }
+    } finally {
+      if (snapshot.temporary && existsSync(snapshot.path)) unlinkSync(snapshot.path)
     }
-
-    const response = await drive.files.create({
-      requestBody: {
-        name: BACKUP_FILE_NAME,
-        parents: ['appDataFolder']
-      },
-      media,
-      fields: 'id,name,modifiedTime'
-    })
-
-    return { ok: true, mode: 'created', file: response.data }
   }
 
   async restoreFromDrive({ beforeReplace } = {}) {
@@ -106,6 +116,7 @@ export class BackupService {
     )
 
     await pipeline(response.data, createWriteStream(tempPath))
+    this.validateRestoredDatabase(tempPath)
 
     if (beforeReplace) beforeReplace()
 
@@ -142,10 +153,63 @@ export class BackupService {
 
     return new google.auth.OAuth2(clientId, clientSecret, REDIRECT_URI)
   }
+
+  async createBackupSnapshot() {
+    if (!existsSync(this.dbPath)) {
+      throw new Error('Database lokal tidak ditemukan untuk backup')
+    }
+
+    const snapshotPath = join(dirname(this.dbPath), `data.backup-${Date.now()}.tmp.sqlite`)
+
+    if (this.databaseConnection?.backup) {
+      await this.databaseConnection.backup(snapshotPath)
+      const size = statSync(snapshotPath).size
+      if (size <= 0) throw new Error('Snapshot backup database kosong')
+      return { path: snapshotPath, temporary: true, size }
+    }
+
+    if (this.databaseConnection?.pragma) {
+      this.databaseConnection.pragma('wal_checkpoint(FULL)')
+    }
+
+    const size = statSync(this.dbPath).size
+    if (size <= 0) throw new Error('Database lokal kosong')
+    return { path: this.dbPath, temporary: false, size }
+  }
+
+  validateRestoredDatabase(filePath) {
+    if (!existsSync(filePath) || statSync(filePath).size <= 0) {
+      throw new Error('File restore dari Google Drive kosong atau tidak valid')
+    }
+
+    const restoredDb = new Database(filePath, { readonly: true, fileMustExist: true })
+    try {
+      const quickCheck = restoredDb.pragma('quick_check', { simple: true })
+      if (quickCheck !== 'ok') {
+        throw new Error(`Validasi SQLite gagal: ${quickCheck}`)
+      }
+
+      const tables = new Set(
+        restoredDb
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+          .all()
+          .map((row) => row.name)
+      )
+      const missingTables = REQUIRED_TABLES.filter((table) => !tables.has(table))
+      if (missingTables.length > 0) {
+        throw new Error(`File restore tidak sesuai schema aplikasi. Tabel hilang: ${missingTables.join(', ')}`)
+      }
+    } finally {
+      restoredDb.close()
+    }
+  }
 }
 
 function waitForOAuthCode() {
   return new Promise((resolve, reject) => {
+    let settled = false
+    let serverListening = false
+    let timeoutId
     const server = createServer((request, response) => {
       const url = new URL(request.url, REDIRECT_URI)
 
@@ -157,14 +221,139 @@ function waitForOAuthCode() {
 
       const code = url.searchParams.get('code')
       response.writeHead(200, { 'Content-Type': 'text/html' })
-      response.end('<h1>Google Drive terhubung.</h1><p>Silakan kembali ke aplikasi Selling Apps.</p>')
-      server.close()
+      response.end(createOAuthSuccessPage())
 
-      if (!code) reject(new Error('Kode OAuth tidak ditemukan'))
-      else resolve(code)
+      finish(code ? null : new Error('Kode OAuth tidak ditemukan'), code)
     })
 
-    server.on('error', reject)
-    server.listen(REDIRECT_PORT, '127.0.0.1')
+    function finish(error, code) {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      if (serverListening) server.close()
+      if (error) reject(error)
+      else resolve(code)
+    }
+
+    timeoutId = setTimeout(() => {
+      finish(new Error('Login Google Drive dibatalkan atau timeout. Coba hubungkan ulang.'))
+    }, OAUTH_TIMEOUT_MS)
+
+    server.on('error', (error) => finish(error))
+    server.on('close', () => {
+      serverListening = false
+    })
+    server.listen(REDIRECT_PORT, '127.0.0.1', () => {
+      serverListening = true
+    })
   })
+}
+
+function createOAuthSuccessPage() {
+  return `<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Google Drive Terhubung</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f7fb;
+        color: #172033;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background:
+          radial-gradient(circle at top left, rgba(39, 111, 191, 0.12), transparent 32rem),
+          linear-gradient(135deg, #f9fbff 0%, #eef3f8 100%);
+      }
+
+      main {
+        width: min(100%, 440px);
+        border: 1px solid #dde4ee;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 24px 70px rgba(30, 45, 70, 0.14);
+        padding: 32px;
+        text-align: center;
+      }
+
+      .icon {
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 20px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        background: #e9f7ef;
+        color: #12843b;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        line-height: 1.2;
+        font-weight: 700;
+      }
+
+      p {
+        margin: 12px 0 0;
+        color: #637083;
+        line-height: 1.6;
+        font-size: 15px;
+      }
+
+      .status {
+        margin-top: 24px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: #f1f5f9;
+        color: #334155;
+        font-size: 14px;
+      }
+
+      strong {
+        color: #172033;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="icon" aria-hidden="true">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+          <path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h1>Google Drive Terhubung</h1>
+      <p>Otorisasi berhasil. Silakan kembali ke aplikasi Selling Apps untuk melanjutkan backup.</p>
+      <div class="status">Tab ini akan tertutup otomatis dalam <strong id="countdown">5</strong> detik.</div>
+    </main>
+    <script>
+      let remaining = 5;
+      const countdown = document.getElementById('countdown');
+      const timer = setInterval(() => {
+        remaining -= 1;
+        countdown.textContent = remaining;
+        if (remaining <= 0) {
+          clearInterval(timer);
+          window.close();
+          setTimeout(() => {
+            document.querySelector('.status').textContent = 'Jika tab belum tertutup, Anda boleh menutupnya secara manual.';
+          }, 500);
+        }
+      }, 1000);
+    </script>
+  </body>
+</html>`
 }

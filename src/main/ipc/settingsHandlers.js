@@ -1,5 +1,6 @@
 import Store from 'electron-store'
 import { createRequire } from 'node:module'
+import { spawn } from 'node:child_process'
 import { assertPermission, getActiveUser } from '../security/currentUser.js'
 import { BackupService } from '../services/BackupService.js'
 import { SystemLogService } from '../services/SystemLogService.js'
@@ -14,7 +15,7 @@ const store = new Store({
 })
 
 export function registerSettingsHandlers(ipcMain, db, dbPath, databaseConnection) {
-  const backupService = new BackupService(store, dbPath)
+  const backupService = new BackupService(store, dbPath, databaseConnection)
   const systemLog = new SystemLogService(db)
 
   ipcMain.handle('settings:get', () => {
@@ -77,8 +78,7 @@ export function registerSettingsHandlers(ipcMain, db, dbPath, databaseConnection
     const result = await backupService.restoreFromDrive({
       beforeReplace: () => databaseConnection.close()
     })
-    app.relaunch()
-    app.exit(0)
+    restartAfterRestore()
     return result
   })
 
@@ -97,4 +97,24 @@ export function registerSettingsHandlers(ipcMain, db, dbPath, databaseConnection
   })
 
   return backupService
+}
+
+function restartAfterRestore() {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const command = process.platform === 'win32' ? 'powershell.exe' : 'sh'
+    const args = process.platform === 'win32'
+      ? ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', 'Start-Sleep -Seconds 2; npm run dev']
+      : ['-c', 'sleep 2; npm run dev']
+    const child = spawn(command, args, {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    child.unref()
+  } else {
+    app.relaunch({ args: process.argv.slice(1) })
+  }
+
+  app.exit(0)
 }

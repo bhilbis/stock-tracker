@@ -152,6 +152,21 @@ export class ReportService {
       params.toDate = filters.toDate
     }
 
+    if (filters.storeId && filters.storeId !== 'ALL') {
+      conditions.push('stock_logs.store_id = @storeId')
+      params.storeId = Number(filters.storeId)
+    }
+
+    if (filters.search) {
+      conditions.push(`(
+        stock_logs.item_code LIKE @search OR
+        inventory.item_name LIKE @search OR
+        stores.owner_name LIKE @search OR
+        stores.store_name LIKE @search
+      )`)
+      params.search = `%${filters.search}%`
+    }
+
     return this.db
       .prepare(`
         SELECT

@@ -35,6 +35,7 @@ const channels = {
   stores: {
     list: 'stores:list',
     create: 'stores:create',
+    detail: 'stores:detail',
     performance: 'stores:performance'
   }
 }
@@ -75,6 +76,7 @@ contextBridge.exposeInMainWorld('api', {
   stores: {
     list: () => invoke(channels.stores.list),
     create: (payload) => invoke(channels.stores.create, payload),
+    detail: (payload) => invoke(channels.stores.detail, payload),
     performance: (filters) => invoke(channels.stores.performance, filters)
   }
 })

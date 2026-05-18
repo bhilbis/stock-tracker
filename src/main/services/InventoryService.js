@@ -131,100 +131,162 @@ export class InventoryService {
   stockOut(payload, operator) {
     const timestamp = nowWibIsoString()
     const businessDate = payload.businessDate || timestamp.slice(0, 10)
+    const stockOutItems = payload.items || [{
+      itemCode: payload.itemCode,
+      qty: payload.qty,
+      unitPrice: payload.unitPrice
+    }]
     let result
     const mutation = this.db.transaction(() => {
-      const item = this.db
-        .prepare('SELECT * FROM inventory WHERE item_code = ?')
-        .get(payload.itemCode)
+      const storeId = this.getOrCreateStockOutStore(payload, timestamp)
 
-      if (!item) throw new Error('Barang tidak ditemukan')
-      if (item.current_stock < payload.qty) throw new Error('Stok tidak mencukupi')
-
-      const store = this.db
-        .prepare(`
-          INSERT INTO stores (owner_name, store_name, phone_number, created_at, updated_at)
-          VALUES (@ownerName, @storeName, @phoneNumber, @timestamp, @timestamp)
-        `)
-        .run({
-          ownerName: payload.ownerName,
-          storeName: payload.storeName || null,
-          phoneNumber: payload.phoneNumber || null,
-          timestamp
-        })
-
-      this.db
-        .prepare(`
-          UPDATE inventory
-          SET current_stock = current_stock - @qty, updated_at = @timestamp
-          WHERE item_code = @itemCode
-        `)
-        .run({ itemCode: payload.itemCode, qty: payload.qty, timestamp })
-
-      let remainingQty = payload.qty
-      const lots = this.db
-        .prepare(`
-          SELECT *
-          FROM inventory_lots
-          WHERE item_code = @itemCode AND qty_remaining > 0
-          ORDER BY business_date ASC, created_at ASC, id ASC
-        `)
-        .all({ itemCode: payload.itemCode })
-
-      for (const lot of lots) {
-        if (remainingQty <= 0) break
-        const usedQty = Math.min(remainingQty, lot.qty_remaining)
-
-        this.db
-          .prepare('UPDATE inventory_lots SET qty_remaining = qty_remaining - @usedQty WHERE id = @lotId')
-          .run({ usedQty, lotId: lot.id })
-
-        this.db
-          .prepare(`
-            INSERT INTO stock_logs (
-              item_code, store_id, mutation_type, qty, cost_price, unit_price,
-              description, operator_name, operator_role, business_date, source_lot_id, created_at
-            )
-            VALUES (
-              @itemCode, @storeId, 'OUT', @qty, @costPrice, @unitPrice,
-              @description, @operatorName, @operatorRole, @businessDate, @sourceLotId, @timestamp
-            )
-          `)
-          .run({
-            itemCode: payload.itemCode,
-            storeId: store.lastInsertRowid,
-            qty: usedQty,
-            costPrice: lot.purchase_price,
-            unitPrice: payload.unitPrice,
-            description: payload.description || null,
-            operatorName: operator.name,
-            operatorRole: operator.role,
-            businessDate,
-            sourceLotId: lot.id,
-            timestamp
-          })
-
-        remainingQty -= usedQty
-      }
-
-      if (remainingQty > 0) throw new Error('Stok lot tidak mencukupi')
+      const processedItems = stockOutItems.map((stockOutItem) => this.writeStockOutItem({
+        stockOutItem,
+        storeId,
+        description: payload.description,
+        businessDate,
+        timestamp,
+        operator
+      }))
 
       this.systemLog.write({
         action: 'inventory.stock_out',
         entityType: 'inventory',
-        entityId: payload.itemCode,
-        description: 'Mengurangi stok untuk mutasi keluar',
+        entityId: stockOutItems.map((item) => item.itemCode).join(', '),
+        description: stockOutItems.length > 1 ? 'Mengurangi stok untuk mutasi keluar multi item' : 'Mengurangi stok untuk mutasi keluar',
         operator,
-        metadata: { qty: payload.qty, storeId: store.lastInsertRowid, businessDate }
+        metadata: {
+          items: stockOutItems.map((item) => ({ itemCode: item.itemCode, qty: item.qty })),
+          storeId,
+          businessDate
+        }
       })
 
       result = {
         ok: true,
-        remainingStock: item.current_stock - payload.qty
+        itemCount: processedItems.length,
+        remainingStocks: processedItems.map((item) => ({
+          itemCode: item.itemCode,
+          remainingStock: item.remainingStock
+        }))
       }
     })
 
     mutation()
     return result
+  }
+
+  getOrCreateStockOutStore(payload, timestamp) {
+    if (payload.storeId) {
+      const store = this.db
+        .prepare('SELECT id FROM stores WHERE id = @storeId')
+        .get({ storeId: payload.storeId })
+
+      if (!store) throw new Error('Toko tidak ditemukan')
+      return store.id
+    }
+
+    const store = this.db
+      .prepare(`
+        SELECT id
+        FROM stores
+        WHERE owner_name = @ownerName
+          AND COALESCE(store_name, '') = COALESCE(@storeName, '')
+          AND COALESCE(phone_number, '') = COALESCE(@phoneNumber, '')
+        ORDER BY id ASC
+        LIMIT 1
+      `)
+      .get({
+        ownerName: payload.ownerName,
+        storeName: payload.storeName || null,
+        phoneNumber: payload.phoneNumber || null
+      })
+
+    if (store) return store.id
+
+    const result = this.db
+      .prepare(`
+        INSERT INTO stores (owner_name, store_name, phone_number, created_at, updated_at)
+        VALUES (@ownerName, @storeName, @phoneNumber, @timestamp, @timestamp)
+      `)
+      .run({
+        ownerName: payload.ownerName,
+        storeName: payload.storeName || null,
+        phoneNumber: payload.phoneNumber || null,
+        timestamp
+      })
+
+    return result.lastInsertRowid
+  }
+
+  writeStockOutItem({ stockOutItem, storeId, description, businessDate, timestamp, operator }) {
+    const item = this.db
+      .prepare('SELECT * FROM inventory WHERE item_code = ?')
+      .get(stockOutItem.itemCode)
+
+    if (!item) throw new Error(`Barang ${stockOutItem.itemCode} tidak ditemukan`)
+    if (item.current_stock < stockOutItem.qty) throw new Error(`Stok ${item.item_name} tidak mencukupi`)
+
+    this.db
+      .prepare(`
+        UPDATE inventory
+        SET current_stock = current_stock - @qty, updated_at = @timestamp
+        WHERE item_code = @itemCode
+      `)
+      .run({ itemCode: stockOutItem.itemCode, qty: stockOutItem.qty, timestamp })
+
+    let remainingQty = stockOutItem.qty
+    const lots = this.db
+      .prepare(`
+        SELECT *
+        FROM inventory_lots
+        WHERE item_code = @itemCode AND qty_remaining > 0
+        ORDER BY business_date ASC, created_at ASC, id ASC
+      `)
+      .all({ itemCode: stockOutItem.itemCode })
+
+    for (const lot of lots) {
+      if (remainingQty <= 0) break
+      const usedQty = Math.min(remainingQty, lot.qty_remaining)
+
+      this.db
+        .prepare('UPDATE inventory_lots SET qty_remaining = qty_remaining - @usedQty WHERE id = @lotId')
+        .run({ usedQty, lotId: lot.id })
+
+      this.db
+        .prepare(`
+          INSERT INTO stock_logs (
+            item_code, store_id, mutation_type, qty, cost_price, unit_price,
+            description, operator_name, operator_role, business_date, source_lot_id, created_at
+          )
+          VALUES (
+            @itemCode, @storeId, 'OUT', @qty, @costPrice, @unitPrice,
+            @description, @operatorName, @operatorRole, @businessDate, @sourceLotId, @timestamp
+          )
+        `)
+        .run({
+          itemCode: stockOutItem.itemCode,
+          storeId,
+          qty: usedQty,
+          costPrice: lot.purchase_price,
+          unitPrice: stockOutItem.unitPrice,
+          description: description || null,
+          operatorName: operator.name,
+          operatorRole: operator.role,
+          businessDate,
+          sourceLotId: lot.id,
+          timestamp
+        })
+
+      remainingQty -= usedQty
+    }
+
+    if (remainingQty > 0) throw new Error(`Stok lot ${item.item_name} tidak mencukupi`)
+
+    return {
+      itemCode: stockOutItem.itemCode,
+      remainingStock: item.current_stock - stockOutItem.qty
+    }
   }
 
   cancelStockOut(payload, operator) {

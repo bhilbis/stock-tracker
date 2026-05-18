@@ -47,6 +47,31 @@ export class StoreService {
     return { ok: true, id: result.lastInsertRowid }
   }
 
+  storeDetail(payload) {
+    const store = this.db
+      .prepare('SELECT * FROM stores WHERE id = @storeId')
+      .get({ storeId: payload.storeId })
+
+    if (!store) throw new Error('Toko tidak ditemukan')
+
+    const logs = this.db
+      .prepare(`
+        SELECT
+          stock_logs.*,
+          COALESCE(stock_logs.business_date, substr(stock_logs.created_at, 1, 10)) AS display_date,
+          inventory.item_name
+        FROM stock_logs
+        LEFT JOIN inventory ON inventory.item_code = stock_logs.item_code
+        WHERE stock_logs.store_id = @storeId
+          AND stock_logs.mutation_type = 'OUT'
+          AND stock_logs.canceled_at IS NULL
+        ORDER BY display_date DESC, stock_logs.created_at DESC, stock_logs.id DESC
+      `)
+      .all({ storeId: payload.storeId })
+
+    return { store, logs }
+  }
+
   storePerformance(filters = {}) {
     const conditions = ["stock_logs.mutation_type = 'OUT'"]
     conditions.push('stock_logs.canceled_at IS NULL')

@@ -1,6 +1,6 @@
 export function Table({ columns, rows, getRowKey, loading = false, emptyMessage = 'Belum ada data.' }) {
   return (
-    <div className="relative overflow-hidden rounded-ui border border-ui-border bg-ui-surface">
+    <div className="relative overflow-x-auto rounded-ui border border-ui-border bg-ui-surface">
       {loading ? (
         <div className="absolute inset-0 z-10 grid place-items-center bg-white/70 backdrop-blur-[1px]">
           <div className="flex items-center gap-3 rounded-ui border border-ui-border bg-ui-surface px-4 py-3 text-sm text-ui-muted shadow-ui">
@@ -9,7 +9,7 @@ export function Table({ columns, rows, getRowKey, loading = false, emptyMessage 
           </div>
         </div>
       ) : null}
-      <table className="w-full border-collapse text-left text-sm">
+      <table className="w-full min-w-[760px] border-collapse text-left text-sm">
         <thead className="bg-ui-bg text-ui-muted">
           <tr>
             {columns.map((column) => (

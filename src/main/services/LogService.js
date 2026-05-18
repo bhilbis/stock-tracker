@@ -22,6 +22,22 @@ export class LogService {
       params.toDate = filters.toDate
     }
 
+    if (filters.storeId && filters.storeId !== 'ALL') {
+      conditions.push('stock_logs.store_id = @storeId')
+      params.storeId = Number(filters.storeId)
+    }
+
+    if (filters.search) {
+      conditions.push(`(
+        stock_logs.item_code LIKE @search OR
+        inventory.item_name LIKE @search OR
+        stores.owner_name LIKE @search OR
+        stores.store_name LIKE @search OR
+        stores.phone_number LIKE @search
+      )`)
+      params.search = `%${filters.search}%`
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
     return this.db

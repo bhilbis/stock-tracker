@@ -44,15 +44,34 @@ function normalizeStockIn(payload) {
 }
 
 function normalizeStockOut(payload) {
+  const items = Array.isArray(payload.items) && payload.items.length
+    ? payload.items.map(normalizeStockOutItem)
+    : [normalizeStockOutItem(payload)]
+
+  const itemCodes = new Set()
+  for (const item of items) {
+    if (itemCodes.has(item.itemCode)) throw new Error('Barang yang sama tidak boleh dipilih lebih dari sekali')
+    itemCodes.add(item.itemCode)
+  }
+
+  const storeId = payload.storeId ? positiveInteger(payload.storeId, 'Toko wajib valid') : null
+
   return {
-    itemCode: requiredString(payload.itemCode, 'Kode barang wajib diisi'),
-    qty: positiveInteger(payload.qty, 'Qty wajib lebih dari 0'),
-    unitPrice: requiredNumber(payload.unitPrice, 'Harga jual wajib valid'),
-    ownerName: requiredString(payload.ownerName, 'Nama pemilik toko wajib diisi'),
+    items,
+    storeId,
+    ownerName: storeId ? optionalString(payload.ownerName) : requiredString(payload.ownerName, 'Nama pemilik toko wajib diisi'),
     storeName: optionalString(payload.storeName),
     phoneNumber: optionalString(payload.phoneNumber),
     description: optionalString(payload.description),
     businessDate: requiredDate(payload.businessDate, 'Tanggal transaksi wajib valid')
+  }
+}
+
+function normalizeStockOutItem(item) {
+  return {
+    itemCode: requiredString(item.itemCode, 'Kode barang wajib diisi'),
+    qty: positiveInteger(item.qty, 'Qty wajib lebih dari 0'),
+    unitPrice: requiredNumber(item.unitPrice, 'Harga jual wajib valid')
   }
 }
 

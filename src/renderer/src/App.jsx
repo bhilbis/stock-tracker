@@ -5,12 +5,16 @@ import {
   CloudUpload,
   Download,
   FileSpreadsheet,
+  Eye,
   Loader2,
   LogOut,
   PackageSearch,
+  Plus,
   RefreshCw,
+  Search,
   Store,
   Settings,
+  Trash2,
   X,
   Upload
 } from 'lucide-react'
@@ -35,7 +39,9 @@ const navItems = [
 const initialFilters = {
   mutationType: 'ALL',
   fromDate: '',
-  toDate: ''
+  toDate: '',
+  search: '',
+  storeId: 'ALL'
 }
 
 export function App() {
@@ -89,7 +95,7 @@ export function App() {
 
   return (
     <main className="min-h-screen bg-ui-bg text-ui-text">
-      <aside className="fixed inset-y-0 left-0 flex w-64 flex-col border-r border-ui-border bg-ui-surface px-4 py-5">
+      <aside className="border-b border-ui-border bg-ui-surface px-4 py-4 lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64 lg:flex-col lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
         <div className="flex items-center gap-3">
           <img src={trackerLogo} alt="Tracker" className="h-10 w-10 rounded-ui object-contain" />
           <div className="space-y-1">
@@ -98,7 +104,7 @@ export function App() {
           </div>
         </div>
 
-        <nav className="mt-8 space-y-1">
+        <nav className="mt-4 flex gap-1 overflow-x-auto pb-1 lg:mt-8 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
           {navItems.map((item) => {
             const Icon = item.icon
             const selected = activePage === item.id
@@ -107,7 +113,7 @@ export function App() {
                 {({ disabled, tooltip }) => (
                   <Button
                     variant={selected ? 'primary' : 'ghost'}
-                    className="w-full justify-start"
+                    className="shrink-0 justify-start lg:w-full"
                     disabled={disabled}
                     title={tooltip}
                     onClick={() => setActivePage(item.id)}
@@ -121,7 +127,7 @@ export function App() {
           })}
         </nav>
 
-        <div className="mt-auto space-y-3">
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto] lg:mt-auto lg:block lg:space-y-3">
           <div className="rounded-ui border border-ui-border bg-ui-bg p-3 text-sm">
             <p className="font-medium">{user.name}</p>
             <p className="text-ui-muted">{user.role}</p>
@@ -140,7 +146,7 @@ export function App() {
         </div>
       </aside>
 
-      <section className="ml-64 p-8">
+      <section className="p-4 sm:p-6 lg:ml-64 lg:p-8">
         <PermissionGate user={user} allowedPermissions={[activeItem.permission]}>
           <PageRouter activePage={activePage} onNavigate={setActivePage} onNotify={notify} onConfirm={requestConfirm} />
         </PermissionGate>
@@ -271,7 +277,7 @@ function InventoryPage({ onNotify }) {
     <div className="space-y-6">
       <PageTitle title="Stok Gudang" description="Daftar barang dan sisa stok terbaru di gudang." />
       <Card>
-        <div className="grid grid-cols-[1fr_auto_auto] items-end gap-3">
+        <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
           <Field label="Cari Barang">
             <Input
               placeholder="Cari kode, nama barang, atau supplier"
@@ -315,22 +321,34 @@ function InventoryPage({ onNotify }) {
 }
 
 function DashboardPage() {
+  const [periodMode, setPeriodMode] = useState('daily')
+  const [customRange, setCustomRange] = useState(() => getDashboardPeriodRange('daily'))
   const [logs, setLogs] = useState([])
   const [storePerformance, setStorePerformance] = useState([])
+  const [items, setItems] = useState([])
+  const [stores, setStores] = useState([])
   const [loading, setLoading] = useState(true)
+  const periodRange = periodMode === 'custom' ? customRange : getDashboardPeriodRange(periodMode)
+  const periodFilters = { fromDate: periodRange.fromDate, toDate: periodRange.toDate }
 
   async function loadDashboard() {
     setLoading(true)
     try {
-      const [nextLogs, nextStorePerformance] = await Promise.all([
-        window.api.logs.list({ mutationType: 'ALL' }),
-        window.api.stores.performance({})
+      const [nextLogs, nextStorePerformance, nextItems, nextStores] = await Promise.all([
+        window.api.logs.list({ mutationType: 'ALL', ...periodFilters }),
+        window.api.stores.performance(periodFilters),
+        window.api.inventory.list(),
+        window.api.stores.list()
       ])
       setLogs(nextLogs)
       setStorePerformance(nextStorePerformance)
+      setItems(nextItems)
+      setStores(nextStores)
     } catch {
       setLogs([])
       setStorePerformance([])
+      setItems([])
+      setStores([])
     } finally {
       setLoading(false)
     }
@@ -338,23 +356,65 @@ function DashboardPage() {
 
   useEffect(() => {
     loadDashboard()
-  }, [])
+  }, [periodMode, customRange.fromDate, customRange.toDate])
 
-  const summary = useMemo(() => buildSummary(logs), [logs])
+  const summary = useMemo(() => buildSummary(logs, items), [logs, items])
+  const periodLabel = formatPeriodLabel(periodRange)
 
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
-        <PageTitle title="Dashboard" description="Ringkasan stok masuk, stok keluar, dan omzet." />
+        <PageTitle title="Dashboard" description={`Ringkasan stok masuk, stok keluar, dan omzet. ${periodLabel}`} />
         <Button variant="ghost" onClick={loadDashboard} disabled={loading}>
           <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
           Refresh
         </Button>
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <Card>
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+          <Field label="Periode Dashboard">
+            <Select value={periodMode} onChange={(event) => setPeriodMode(event.target.value)}>
+              <option value="daily">Harian</option>
+              <option value="weekly">Mingguan</option>
+              <option value="monthly">Bulanan</option>
+              <option value="custom">Custom</option>
+            </Select>
+          </Field>
+          <Field label="Dari Tanggal">
+            <Input
+              type="date"
+              disabled={periodMode !== 'custom'}
+              value={periodRange.fromDate}
+              onChange={(event) => setCustomRange((range) => ({ ...range, fromDate: event.target.value }))}
+            />
+          </Field>
+          <Field label="Sampai Tanggal">
+            <Input
+              type="date"
+              disabled={periodMode !== 'custom'}
+              value={periodRange.toDate}
+              onChange={(event) => setCustomRange((range) => ({ ...range, toDate: event.target.value }))}
+            />
+          </Field>
+          <Button
+            variant="secondary"
+            disabled={periodMode !== 'custom'}
+            onClick={() => setCustomRange(getDashboardPeriodRange('daily'))}
+          >
+            Hari Ini
+          </Button>
+        </div>
+      </Card>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <MetricCard label="Barang Masuk" value={summary.totalIn} />
         <MetricCard label="Barang Keluar" value={summary.totalOut} />
         <MetricCard label="Estimasi Omzet" value={formatRupiah(summary.turnover)} />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Estimasi Laba" value={formatRupiah(summary.profit)} compact />
+        <MetricCard label="SKU Bergerak" value={summary.activeSku} compact />
+        <MetricCard label="Total Toko" value={stores.length} compact />
+        <MetricCard label="Stok Gudang" value={summary.stockOnHand} compact />
       </div>
       <Card>
         <div className="space-y-4">
@@ -372,22 +432,80 @@ function DashboardPage() {
           </ChartFrame>
         </div>
       </Card>
-      <Card>
-        <div className="space-y-4">
-          <h3 className="font-semibold">Performa Toko Teratas</h3>
-          <ChartFrame loading={loading} empty={storePerformance.length === 0} emptyMessage="Belum ada performa toko untuk ditampilkan.">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={storePerformance}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="store_label" />
-                <YAxis />
-                <Tooltip formatter={(value, name) => (name === 'turnover' ? formatRupiah(value) : value)} />
-                <Bar dataKey="qty" fill="var(--color-brand-secondary)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-        </div>
-      </Card>
+      <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+        <Card>
+          <div className="space-y-4">
+            <h3 className="font-semibold">Performa Toko Teratas</h3>
+            <ChartFrame loading={loading} empty={storePerformance.length === 0} emptyMessage="Belum ada performa toko untuk ditampilkan.">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={storePerformance}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="store_label" />
+                  <YAxis />
+                  <Tooltip formatter={(value, name) => (name === 'turnover' ? formatRupiah(value) : value)} />
+                  <Bar dataKey="qty" fill="var(--color-brand-secondary)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </div>
+        </Card>
+        <Card>
+          <div className="space-y-4">
+            <h3 className="font-semibold">Barang Paling Sering Keluar</h3>
+            <SimpleList
+              rows={summary.topItems}
+              emptyMessage={loading ? 'Memuat data...' : 'Belum ada mutasi keluar.'}
+              renderRow={(row) => (
+                <>
+                  <div>
+                    <p className="font-medium">{row.itemName}</p>
+                    <p className="text-xs text-ui-muted">{row.itemCode}</p>
+                  </div>
+                  <p className="font-semibold">{row.qty}</p>
+                </>
+              )}
+            />
+          </div>
+        </Card>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <div className="space-y-4">
+            <h3 className="font-semibold">Mutasi Terbaru</h3>
+            <SimpleList
+              rows={summary.recentLogs}
+              emptyMessage={loading ? 'Memuat data...' : 'Belum ada mutasi.'}
+              renderRow={(row) => (
+                <>
+                  <div>
+                    <p className="font-medium">{row.item_name || row.item_code}</p>
+                    <p className="text-xs text-ui-muted">{row.display_date || row.created_at?.slice(0, 10)} - {row.store_name || row.owner_name || row.mutation_type}</p>
+                  </div>
+                  <p className="text-sm font-semibold">{row.mutation_type} {row.qty}</p>
+                </>
+              )}
+            />
+          </div>
+        </Card>
+        <Card>
+          <div className="space-y-4">
+            <h3 className="font-semibold">Stok Rendah</h3>
+            <SimpleList
+              rows={items.filter((item) => item.current_stock <= 5).slice(0, 6)}
+              emptyMessage={loading ? 'Memuat data...' : 'Tidak ada stok rendah.'}
+              renderRow={(row) => (
+                <>
+                  <div>
+                    <p className="font-medium">{row.item_name}</p>
+                    <p className="text-xs text-ui-muted">{row.item_code}</p>
+                  </div>
+                  <p className="font-semibold">{row.current_stock}</p>
+                </>
+              )}
+            />
+          </div>
+        </Card>
+      </div>
     </div>
   )
 }
@@ -395,6 +513,9 @@ function DashboardPage() {
 function StoresPage({ onNotify }) {
   const [stores, setStores] = useState([])
   const [form, setForm] = useState({ ownerName: '', storeName: '', phoneNumber: '' })
+  const [selectedStore, setSelectedStore] = useState(null)
+  const [storeDetail, setStoreDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -427,13 +548,58 @@ function StoresPage({ onNotify }) {
     }
   }
 
+  async function openStoreDetail(store) {
+    setSelectedStore(store)
+    setStoreDetail(null)
+    setDetailLoading(true)
+    try {
+      setStoreDetail(await loadStoreDetail(store))
+    } catch (err) {
+      onNotify('error', getUserErrorMessage(err))
+      setSelectedStore(null)
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  async function loadStoreDetail(store) {
+    if (typeof window.api.stores.detail === 'function') {
+      try {
+        return await window.api.stores.detail({ storeId: store.id })
+      } catch (err) {
+        const message = String(err?.message || err)
+        if (!message.includes('No handler registered')) throw err
+      }
+    }
+
+    if (typeof window.api.logs.list !== 'function') {
+      throw new Error('Aplikasi perlu direstart agar fitur detail toko aktif.')
+    }
+
+    const logs = await window.api.logs.list({ mutationType: 'OUT' })
+    return {
+      store,
+      logs: logs.filter((log) => Number(log.store_id) === Number(store.id) && !log.canceled_at)
+    }
+  }
+
   const columns = [
     { key: 'owner_name', header: 'Owner' },
     { key: 'store_name', header: 'Nama Toko', render: (row) => row.store_name || '-' },
     { key: 'phone_number', header: 'No Handphone', render: (row) => row.phone_number || '-' },
     { key: 'total_qty_out', header: 'Total Qty Keluar' },
     { key: 'total_turnover', header: 'Omzet', render: (row) => formatRupiah(row.total_turnover) },
-    { key: 'updated_at', header: 'Update Terakhir' }
+    { key: 'updated_at', header: 'Update Terakhir' },
+    {
+      key: 'actions',
+      header: 'Action',
+      render: (row) => (
+        <Button size="sm" variant="ghost" onClick={() => openStoreDetail(row)}>
+          <Eye size={16} />
+          Detail
+        </Button>
+      )
+    }
   ]
 
   return (
@@ -446,7 +612,7 @@ function StoresPage({ onNotify }) {
         </Button>
       </div>
       <Card>
-        <form className="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-4" onSubmit={submit}>
+        <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto] xl:items-end" onSubmit={submit}>
           <Field label="Owner Name">
             <Input required value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} />
           </Field>
@@ -463,6 +629,64 @@ function StoresPage({ onNotify }) {
       </Card>
       {message ? <p className="text-sm text-brand-secondary">{message}</p> : null}
       <Table columns={columns} rows={stores} getRowKey={(row) => row.id} loading={loading} emptyMessage="Belum ada data toko." />
+      {selectedStore ? (
+        <StoreDetailModal
+          store={selectedStore}
+          detail={storeDetail}
+          loading={detailLoading}
+          onClose={() => {
+            setSelectedStore(null)
+            setStoreDetail(null)
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function StoreDetailModal({ store, detail, loading, onClose }) {
+  const logs = detail?.logs || []
+  const totalQty = logs.reduce((sum, log) => sum + log.qty, 0)
+  const totalTurnover = logs.reduce((sum, log) => sum + log.qty * log.unit_price, 0)
+  const columns = [
+    { key: 'display_date', header: 'Tanggal' },
+    { key: 'item_code', header: 'Kode' },
+    { key: 'item_name', header: 'Nama Barang', render: (row) => row.item_name || '-' },
+    { key: 'qty', header: 'Qty' },
+    { key: 'unit_price', header: 'Harga Jual', render: (row) => formatRupiah(row.unit_price) },
+    { key: 'total', header: 'Total', render: (row) => formatRupiah(row.qty * row.unit_price) },
+    { key: 'operator_name', header: 'Operator', render: (row) => row.operator_name || '-' }
+  ]
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-4 sm:p-6">
+      <Card className="max-h-[90vh] w-full max-w-5xl overflow-auto">
+        <div className="space-y-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold">{store.store_name || store.owner_name}</h2>
+              <p className="text-sm text-ui-muted">
+                {store.owner_name}{store.phone_number ? ` - ${store.phone_number}` : ''}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={onClose} aria-label="Tutup">
+              <X size={18} />
+            </Button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <CompactStat label="Total Item Keluar" value={totalQty} />
+            <CompactStat label="Total Omzet" value={formatRupiah(totalTurnover)} />
+            <CompactStat label="Jumlah Transaksi" value={logs.length} />
+          </div>
+          <Table
+            columns={columns}
+            rows={logs}
+            getRowKey={(row) => row.id}
+            loading={loading}
+            emptyMessage="Belum ada barang yang pernah dikirim ke toko ini."
+          />
+        </div>
+      </Card>
     </div>
   )
 }
@@ -491,7 +715,7 @@ function EditItemModal({ item, onClose, onSaved, onNotify }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-6">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-4 sm:p-6">
       <Card className="w-full max-w-2xl">
         <form className="space-y-5" onSubmit={submit}>
           <div className="flex items-start justify-between gap-4">
@@ -503,7 +727,7 @@ function EditItemModal({ item, onClose, onSaved, onNotify }) {
               <X size={18} />
             </Button>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
             <Field label="Kode Barang">
               <Input disabled value={form.itemCode} />
             </Field>
@@ -584,7 +808,7 @@ function StockInModal({ onClose, onSaved, onNotify }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-6">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-4 sm:p-6">
       <Card className="w-full max-w-3xl">
         <form className="space-y-5" onSubmit={submit}>
           <div className="flex items-start justify-between gap-4">
@@ -596,7 +820,7 @@ function StockInModal({ onClose, onSaved, onNotify }) {
               <X size={18} />
             </Button>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
             <Field label="Tanggal Transaksi"><Input required type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} /></Field>
             <div className="relative space-y-1.5 text-sm font-medium">
               <span>Kode Barang</span>
@@ -647,12 +871,11 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
   const today = new Date().toISOString().slice(0, 10)
   const [items, setItems] = useState([])
   const [stores, setStores] = useState([])
-  const [storeQuery, setStoreQuery] = useState('')
-  const [showStoreSuggestions, setShowStoreSuggestions] = useState(false)
+  const [storeSearch, setStoreSearch] = useState('')
+  const [showStoreOptions, setShowStoreOptions] = useState(false)
   const [form, setForm] = useState({
-    itemCode: '',
-    unitPrice: '',
-    qty: '',
+    items: [createStockOutRow()],
+    storeId: '',
     ownerName: '',
     storeName: '',
     phoneNumber: '',
@@ -666,45 +889,78 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
     window.api.stores.list().then(setStores)
   }, [])
 
-  const selectedItem = items.find((item) => item.item_code === form.itemCode)
-  const matchedStores = showStoreSuggestions && storeQuery
-    ? stores
-        .filter((store) => {
-          const keyword = storeQuery.toLowerCase()
-          return (
-            store.owner_name.toLowerCase().includes(keyword) ||
-            String(store.store_name || '').toLowerCase().includes(keyword) ||
-            String(store.phone_number || '').toLowerCase().includes(keyword)
-          )
-        })
-        .slice(0, 8)
-    : []
+  const filteredStores = stores
+    .filter((store) => {
+      const keyword = storeSearch.toLowerCase()
+      if (!keyword) return true
+      return (
+        store.owner_name.toLowerCase().includes(keyword) ||
+        String(store.store_name || '').toLowerCase().includes(keyword) ||
+        String(store.phone_number || '').toLowerCase().includes(keyword)
+      )
+    })
+    .slice(0, 60)
 
-  function selectItem(itemCode) {
-    const item = items.find((entry) => entry.item_code === itemCode)
-    setForm({ ...form, itemCode, unitPrice: item?.default_selling_price || '' })
+  function updateStockOutRow(rowId, patch) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      items: currentForm.items.map((row) => (row.id === rowId ? { ...row, ...patch } : row))
+    }))
   }
 
-  function selectStore(store) {
+  function selectItem(rowId, itemCode) {
+    const item = items.find((entry) => entry.item_code === itemCode)
+    updateStockOutRow(rowId, {
+      itemCode,
+      itemSearch: item ? formatItemLabel(item) : '',
+      unitPrice: item?.default_selling_price || '',
+      showItemOptions: false
+    })
+  }
+
+  function addStockOutRow() {
+    setForm((currentForm) => ({
+      ...currentForm,
+      items: [...currentForm.items, createStockOutRow()]
+    }))
+  }
+
+  function removeStockOutRow(rowId) {
+    setForm((currentForm) => ({
+      ...currentForm,
+      items: currentForm.items.length > 1
+        ? currentForm.items.filter((row) => row.id !== rowId)
+        : currentForm.items
+    }))
+  }
+
+  function selectStoreId(storeId) {
+    const store = stores.find((entry) => String(entry.id) === String(storeId))
     setForm({
       ...form,
-      ownerName: store.owner_name,
-      storeName: store.store_name || '',
-      phoneNumber: store.phone_number || ''
+      storeId,
+      ownerName: store?.owner_name || '',
+      storeName: store?.store_name || '',
+      phoneNumber: store?.phone_number || ''
     })
-    setStoreQuery(formatStoreLabel(store))
-    setShowStoreSuggestions(false)
+    setStoreSearch(store ? formatStoreLabel(store) : '')
+    setShowStoreOptions(false)
   }
 
   async function submit(event) {
     event.preventDefault()
     setMessage('')
     try {
-      await window.api.inventory.stockOut(form)
-      setForm({ itemCode: '', unitPrice: '', qty: '', ownerName: '', storeName: '', phoneNumber: '', description: '', businessDate: today })
-      setStoreQuery('')
-      setMessage('Mutasi keluar berhasil disimpan.')
-      onNotify('success', 'Mutasi keluar berhasil disimpan.')
+      if (!form.storeId) throw new Error('Toko wajib dipilih')
+      const payload = {
+        ...form,
+        items: form.items.map(({ itemCode, unitPrice, qty }) => ({ itemCode, unitPrice, qty }))
+      }
+      await window.api.inventory.stockOut(payload)
+      setForm({ items: [createStockOutRow()], storeId: '', ownerName: '', storeName: '', phoneNumber: '', description: '', businessDate: today })
+      setStoreSearch('')
+      setMessage(`Mutasi keluar ${payload.items.length} item berhasil disimpan.`)
+      onNotify('success', `Mutasi keluar ${payload.items.length} item berhasil disimpan.`)
       setItems(await window.api.inventory.list())
       if (onSaved) await onSaved()
     } catch (err) {
@@ -714,51 +970,142 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
 
   const formContent = (
     <>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-4 md:grid-cols-2">
         <Field label="Tanggal Transaksi"><Input required type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} /></Field>
-        <Field label="Pilih Barang">
-          <Select required value={form.itemCode} onChange={(e) => selectItem(e.target.value)}>
-            <option value="">Pilih kode atau nama barang</option>
-            {items.map((item) => (
-              <option key={item.item_code} value={item.item_code}>
-                {item.item_code} - {item.item_name} - stok {item.current_stock}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Stok Saat Ini"><Input disabled value={selectedItem?.current_stock ?? ''} /></Field>
-        <Field label="Harga Jual"><Input required type="number" min="0" value={form.unitPrice} onChange={(e) => setForm({ ...form, unitPrice: e.target.value })} /></Field>
-        <Field label="Qty Keluar"><Input required type="number" min="1" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} /></Field>
         <div className="relative space-y-1.5 text-sm font-medium">
           <span>Toko / Owner / No HP</span>
-          <Input
-            required
-            value={storeQuery}
-            placeholder="Cari nama toko, owner, atau no HP"
-            onFocus={() => setShowStoreSuggestions(true)}
-            onChange={(event) => {
-              setStoreQuery(event.target.value)
-              setShowStoreSuggestions(true)
-              setForm({ ...form, ownerName: '', storeName: '', phoneNumber: '' })
-            }}
-          />
-          {matchedStores.length ? (
-            <div className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-ui border border-ui-border bg-ui-surface shadow-ui">
-              {matchedStores.map((store) => (
-                <button
-                  type="button"
-                  key={store.id}
-                  className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-ui-bg"
-                  onClick={() => selectStore(store)}
-                >
-                  <span className="font-medium">{store.store_name || store.owner_name}</span>
-                  <span className="text-ui-muted">
-                    {store.owner_name}{store.phone_number ? ` - ${store.phone_number}` : ''}
-                  </span>
-                </button>
-              ))}
+          <div className="relative">
+            <Input
+              required
+              value={storeSearch}
+              placeholder="Cari toko, owner, atau no HP"
+              onFocus={() => setShowStoreOptions(true)}
+              onBlur={() => window.setTimeout(() => setShowStoreOptions(false), 120)}
+              onChange={(event) => {
+                setStoreSearch(event.target.value)
+                setShowStoreOptions(true)
+                setForm({ ...form, storeId: '', ownerName: '', storeName: '', phoneNumber: '' })
+              }}
+            />
+            <Search size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ui-muted" />
+          </div>
+          {showStoreOptions ? (
+            <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-ui border border-ui-border bg-ui-surface py-1 shadow-ui">
+              {filteredStores.length ? (
+                filteredStores.map((store) => (
+                  <button
+                    type="button"
+                    key={store.id}
+                    className="flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm hover:bg-ui-bg focus:bg-ui-bg focus:outline-none"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectStoreId(String(store.id))}
+                  >
+                    <span className="font-medium text-ui-text">{store.store_name || store.owner_name}</span>
+                    <span className="text-xs text-ui-muted">
+                      {store.owner_name}{store.phone_number ? ` - ${store.phone_number}` : ''}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="px-3 py-3 text-sm text-ui-muted">Toko tidak ditemukan.</div>
+              )}
             </div>
           ) : null}
+        </div>
+      </div>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Item Mutasi</h3>
+            <p className="text-sm text-ui-muted">Pilih beberapa barang untuk toko yang sama.</p>
+          </div>
+          <Button type="button" variant="secondary" size="sm" onClick={addStockOutRow}>
+            <Plus size={16} />
+            Tambah Item
+          </Button>
+        </div>
+        <div className="space-y-2">
+          {form.items.map((row, index) => {
+            const selectedItem = items.find((item) => item.item_code === row.itemCode)
+            const selectedItemCodes = new Set(form.items.map((item) => item.itemCode).filter(Boolean))
+            const keyword = String(row.itemSearch || '').toLowerCase()
+            const availableItems = items
+              .filter((item) => item.item_code === row.itemCode || !selectedItemCodes.has(item.item_code))
+              .filter((item) => {
+                if (!keyword) return true
+                return (
+                  item.item_code.toLowerCase().includes(keyword) ||
+                  item.item_name.toLowerCase().includes(keyword) ||
+                  String(item.supplier || '').toLowerCase().includes(keyword)
+                )
+              })
+              .slice(0, 80)
+            return (
+              <div key={row.id} className="grid gap-3 rounded-ui border border-ui-border bg-ui-bg p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.7fr)_0.6fr_0.9fr_0.8fr_auto] xl:items-end">
+                <div className="relative space-y-1.5 text-sm font-medium">
+                  <span>Barang</span>
+                  <div className="relative">
+                    <Input
+                      required
+                      value={row.itemSearch || ''}
+                      placeholder="Cari kode atau nama barang"
+                      onFocus={() => updateStockOutRow(row.id, { showItemOptions: true })}
+                      onBlur={() => window.setTimeout(() => updateStockOutRow(row.id, { showItemOptions: false }), 120)}
+                      onChange={(event) => updateStockOutRow(row.id, {
+                        itemSearch: event.target.value,
+                        itemCode: '',
+                        unitPrice: '',
+                        showItemOptions: true
+                      })}
+                    />
+                    <Search size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ui-muted" />
+                  </div>
+                  {row.showItemOptions ? (
+                    <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-ui border border-ui-border bg-ui-surface py-1 shadow-ui">
+                      {availableItems.length ? (
+                        availableItems.map((item) => (
+                          <button
+                            type="button"
+                            key={item.item_code}
+                            className="flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm hover:bg-ui-bg focus:bg-ui-bg focus:outline-none"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => selectItem(row.id, item.item_code)}
+                          >
+                            <span className="font-medium text-ui-text">{item.item_code} - {item.item_name}</span>
+                            <span className="text-xs text-ui-muted">
+                              Stok {item.current_stock}{item.supplier ? ` - ${item.supplier}` : ''}
+                            </span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-3 py-3 text-sm text-ui-muted">Barang tidak ditemukan.</div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+                <Field label="Stok">
+                  <Input disabled value={selectedItem?.current_stock ?? ''} />
+                </Field>
+                <Field label="Qty">
+                  <Input required type="number" min="1" value={row.qty} onChange={(e) => updateStockOutRow(row.id, { qty: e.target.value })} />
+                </Field>
+                <Field label="Harga Jual">
+                  <Input required type="number" min="0" value={row.unitPrice} onChange={(e) => updateStockOutRow(row.id, { unitPrice: e.target.value })} />
+                </Field>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="mb-0.5 h-10 w-10 px-0 text-brand-danger hover:text-brand-danger"
+                  disabled={form.items.length === 1}
+                  title="Hapus item"
+                  onClick={() => removeStockOutRow(row.id)}
+                >
+                  <Trash2 size={16} />
+                </Button>
+              </div>
+            )
+          })}
         </div>
       </div>
       <Field label="Catatan"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
@@ -770,13 +1117,13 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
 
   if (modal) {
     return (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-6">
-        <Card className="w-full max-w-3xl">
+      <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-4 sm:p-6">
+        <Card className="max-h-[90vh] w-full max-w-5xl overflow-auto">
           <form className="space-y-5" onSubmit={submit}>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
-                <h2 className="text-xl font-semibold">Tambah Mutasi</h2>
-                <p className="text-sm text-ui-muted">Kurangi stok untuk pengiriman ke toko. Sistem menolak stok minus.</p>
+                <h2 className="text-xl font-semibold">Tambah Mutasi Multi Item</h2>
+                <p className="text-sm text-ui-muted">Satu toko bisa menerima beberapa barang dalam satu transaksi.</p>
               </div>
               <Button variant="ghost" size="sm" onClick={onClose} aria-label="Tutup">
                 <X size={18} />
@@ -800,6 +1147,7 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
 function LogsPage({ onNotify, onConfirm }) {
   const [filters, setFilters] = useState(initialFilters)
   const [logs, setLogs] = useState([])
+  const [stores, setStores] = useState([])
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [showMutationForm, setShowMutationForm] = useState(false)
@@ -820,7 +1168,11 @@ function LogsPage({ onNotify, onConfirm }) {
   useEffect(() => {
     setPage(1)
     loadLogs(filters)
-  }, [filters.mutationType, filters.fromDate, filters.toDate])
+  }, [filters.mutationType, filters.fromDate, filters.toDate, filters.search, filters.storeId])
+
+  useEffect(() => {
+    window.api.stores.list().then(setStores).catch(() => setStores([]))
+  }, [])
 
   const activeLogs = logs.filter((log) => !log.canceled_at)
   const paginatedLogs = paginateRows(activeLogs, page, pageSize)
@@ -916,7 +1268,18 @@ function LogsPage({ onNotify, onConfirm }) {
               </Button>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.3fr_0.9fr_0.9fr_0.9fr_1fr]">
+            <Field label="Search">
+              <div className="relative">
+                <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ui-muted" />
+                <Input
+                  className="pl-9"
+                  placeholder="Cari kode, barang, toko"
+                  value={filters.search}
+                  onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                />
+              </div>
+            </Field>
             <Field label="Jenis Mutasi">
               <Select
                 value={filters.mutationType}
@@ -932,6 +1295,16 @@ function LogsPage({ onNotify, onConfirm }) {
             </Field>
             <Field label="Sampai Tanggal">
               <Input type="date" value={filters.toDate} onChange={(e) => setFilters({ ...filters, toDate: e.target.value })} />
+            </Field>
+            <Field label="Filter Toko">
+              <Select value={filters.storeId} onChange={(e) => setFilters({ ...filters, storeId: e.target.value })}>
+                <option value="ALL">Semua toko</option>
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.store_name || store.owner_name}
+                  </option>
+                ))}
+              </Select>
             </Field>
           </div>
         </div>
@@ -1081,7 +1454,7 @@ function SettingsPage({ onNotify, onConfirm }) {
                 <p className="font-medium">Lokasi Database Lokal</p>
                 <p className="mt-1 break-all text-ui-muted">{settings.databasePath}</p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Google Client ID"><Input value={credentials.clientId} onChange={(e) => setCredentials({ ...credentials, clientId: e.target.value })} /></Field>
                 <Field label="Google Client Secret"><Input type="password" value={credentials.clientSecret} onChange={(e) => setCredentials({ ...credentials, clientSecret: e.target.value })} /></Field>
               </div>
@@ -1121,7 +1494,7 @@ function SettingsPage({ onNotify, onConfirm }) {
           ) : (
             <div className="space-y-4">
               <div className="flex items-end justify-between gap-4">
-                <div className="grid flex-1 grid-cols-2 gap-3">
+                <div className="grid flex-1 gap-3 md:grid-cols-2">
                   <Field label="Dari Tanggal">
                     <Input type="date" value={systemFilters.fromDate} onChange={(e) => setSystemFilters({ ...systemFilters, fromDate: e.target.value })} />
                   </Field>
@@ -1177,19 +1550,48 @@ function PageTitle({ title, description }) {
 
 function Field({ label, children }) {
   return (
-    <label className="space-y-1.5 text-sm font-medium">
+    <label className="block space-y-1.5 text-sm font-medium">
       <span>{label}</span>
       {children}
     </label>
   )
 }
 
-function MetricCard({ label, value }) {
+function MetricCard({ label, value, compact = false }) {
   return (
     <Card>
       <p className="text-sm text-ui-muted">{label}</p>
-      <p className="mt-2 text-3xl font-semibold">{value}</p>
+      <p className={compact ? 'mt-2 text-2xl font-semibold' : 'mt-2 text-3xl font-semibold'}>{value}</p>
     </Card>
+  )
+}
+
+function SimpleList({ rows, emptyMessage, renderRow }) {
+  if (!rows.length) {
+    return (
+      <div className="grid min-h-40 place-items-center rounded-ui border border-ui-border bg-ui-bg px-4 text-center text-sm text-ui-muted">
+        {emptyMessage}
+      </div>
+    )
+  }
+
+  return (
+    <div className="divide-y divide-ui-border rounded-ui border border-ui-border">
+      {rows.map((row, index) => (
+        <div key={row.id || row.itemCode || index} className="flex min-h-14 items-center justify-between gap-3 px-3 py-2 text-sm">
+          {renderRow(row)}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function CompactStat({ label, value }) {
+  return (
+    <div className="rounded-ui border border-ui-border bg-ui-bg p-3">
+      <p className="text-sm text-ui-muted">{label}</p>
+      <p className="mt-1 text-xl font-semibold">{value}</p>
+    </div>
   )
 }
 
@@ -1217,7 +1619,7 @@ function ChartFrame({ loading, empty, emptyMessage, children }) {
 
 function ActionLoadingOverlay({ title, description }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/45 p-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/45 p-4 backdrop-blur-sm sm:p-6">
       <div className="w-full max-w-sm rounded-ui border border-ui-border bg-ui-surface p-6 text-center shadow-ui">
         <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-brand-primary/10 text-brand-primary">
           <Loader2 size={30} className="animate-spin" />
@@ -1277,9 +1679,20 @@ function paginateRows(rows, page, pageSize) {
   return rows.slice(start, start + pageSize)
 }
 
+function createStockOutRow() {
+  return {
+    id: `${Date.now()}-${Math.random()}`,
+    itemCode: '',
+    itemSearch: '',
+    showItemOptions: false,
+    unitPrice: '',
+    qty: ''
+  }
+}
+
 function ToastViewport({ toasts, onClose }) {
   return (
-    <div className="fixed right-5 top-5 z-[80] w-full max-w-sm space-y-3">
+    <div className="fixed left-4 right-4 top-4 z-80 space-y-3 sm:left-auto sm:right-5 sm:top-5 sm:w-full sm:max-w-sm">
       {toasts.map((toast) => (
         <div
           key={toast.id}
@@ -1317,7 +1730,7 @@ function ConfirmDialog({ dialog, onClose }) {
   const canSubmit = !dialog.requireInput || value.trim().length > 0
 
   return (
-    <div className="fixed inset-0 z-[90] grid place-items-center bg-ui-text/45 p-6">
+    <div className="fixed inset-0 z-90 grid place-items-center bg-ui-text/45 p-4 sm:p-6">
       <Card className="w-full max-w-md">
         <div className="space-y-5">
           <div className="space-y-2">
@@ -1388,24 +1801,90 @@ function formatStoreLabel(store) {
   return `${storeName} (${store.owner_name})${phone}`
 }
 
-function buildSummary(logs) {
+function formatItemLabel(item) {
+  return `${item.item_code} - ${item.item_name}`
+}
+
+function getDashboardPeriodRange(mode) {
+  const today = new Date()
+
+  if (mode === 'weekly') {
+    const day = today.getDay()
+    const mondayOffset = day === 0 ? -6 : 1 - day
+    const monday = addDays(today, mondayOffset)
+    return {
+      fromDate: formatDateInput(monday),
+      toDate: formatDateInput(addDays(monday, 6))
+    }
+  }
+
+  if (mode === 'monthly') {
+    return {
+      fromDate: formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1)),
+      toDate: formatDateInput(new Date(today.getFullYear(), today.getMonth() + 1, 0))
+    }
+  }
+
+  const date = formatDateInput(today)
+  return { fromDate: date, toDate: date }
+}
+
+function addDays(date, days) {
+  const nextDate = new Date(date)
+  nextDate.setDate(nextDate.getDate() + days)
+  return nextDate
+}
+
+function formatDateInput(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatPeriodLabel(range) {
+  if (!range.fromDate && !range.toDate) return ''
+  if (range.fromDate === range.toDate) return `Periode ${range.fromDate}.`
+  return `Periode ${range.fromDate} sampai ${range.toDate}.`
+}
+
+function buildSummary(logs, items = []) {
   const activeLogs = logs.filter((log) => !log.canceled_at)
   const totalIn = activeLogs.filter((log) => log.mutation_type === 'IN').reduce((sum, log) => sum + log.qty, 0)
   const outLogs = activeLogs.filter((log) => log.mutation_type === 'OUT')
   const totalOut = outLogs.reduce((sum, log) => sum + log.qty, 0)
   const turnover = outLogs.reduce((sum, log) => sum + log.qty * log.unit_price, 0)
+  const profit = outLogs.reduce((sum, log) => sum + (log.unit_price - log.cost_price) * log.qty, 0)
+  const stockOnHand = items.reduce((sum, item) => sum + item.current_stock, 0)
   const dailyMap = new Map()
+  const itemMap = new Map()
 
   outLogs.forEach((log) => {
-    const date = log.created_at.slice(0, 10)
+    const date = log.display_date || log.created_at.slice(0, 10)
     dailyMap.set(date, (dailyMap.get(date) || 0) + log.qty)
+
+    const itemCode = log.item_code
+    const current = itemMap.get(itemCode) || {
+      itemCode,
+      itemName: log.item_name || itemCode,
+      qty: 0
+    }
+    current.qty += log.qty
+    itemMap.set(itemCode, current)
   })
 
   return {
     totalIn,
     totalOut,
     turnover,
-    chartRows: Array.from(dailyMap.entries()).map(([date, qty]) => ({ date, qty }))
+    profit,
+    stockOnHand,
+    activeSku: itemMap.size,
+    topItems: Array.from(itemMap.values()).sort((a, b) => b.qty - a.qty).slice(0, 6),
+    recentLogs: activeLogs.slice(0, 6),
+    chartRows: Array.from(dailyMap.entries())
+      .sort(([leftDate], [rightDate]) => leftDate.localeCompare(rightDate))
+      .map(([date, qty]) => ({ date, qty }))
   }
 }
 

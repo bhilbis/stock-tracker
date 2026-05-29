@@ -236,6 +236,7 @@ function InventoryPage({ onNotify }) {
   const [search, setSearch] = useState('')
   const [showStockIn, setShowStockIn] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
+  const [lotHistoryItem, setLotHistoryItem] = useState(null)
 
   async function loadItems() {
     setItems(await window.api.inventory.list())
@@ -257,18 +258,33 @@ function InventoryPage({ onNotify }) {
   const columns = [
     { key: 'item_code', header: 'Kode' },
     { key: 'item_name', header: 'Nama Barang' },
-    { key: 'current_stock', header: 'Stok' },
-    { key: 'purchase_price', header: 'Harga Beli', render: (row) => formatRupiah(row.purchase_price) },
-    { key: 'default_selling_price', header: 'Harga Jual', render: (row) => formatRupiah(row.default_selling_price) },
+    {
+      key: 'current_stock',
+      header: 'Stok',
+      render: (row) => `${row.current_stock} ${row.base_unit || 'PCS'}`
+    },
+    {
+      key: 'qty_per_box',
+      header: 'Isi/Kardus',
+      render: (row) => `${row.qty_per_box || row.isi_per_kardus || 1} ${row.base_unit || 'PCS'}/${row.box_unit || 'KARDUS'}`
+    },
+    { key: 'purchase_price', header: 'Harga Beli/PCS', render: (row) => formatRupiah(row.purchase_price) },
+    { key: 'default_selling_price', header: 'Harga Jual/PCS', render: (row) => formatRupiah(row.default_selling_price) },
     { key: 'supplier', header: 'Supplier', render: (row) => row.supplier || '-' },
     { key: 'updated_at', header: 'Update Terakhir' },
     {
       key: 'actions',
       header: '',
       render: (row) => (
-        <Button size="sm" variant="ghost" onClick={() => setEditingItem(row)}>
-          Edit
-        </Button>
+        <div className="flex gap-1">
+          <Button size="sm" variant="ghost" onClick={() => setLotHistoryItem(row)}>
+            <Eye size={14} />
+            Lot
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setEditingItem(row)}>
+            Edit
+          </Button>
+        </div>
       )
     }
   ]
@@ -314,6 +330,13 @@ function InventoryPage({ onNotify }) {
             setEditingItem(null)
             await loadItems()
           }}
+        />
+      ) : null}
+      {lotHistoryItem ? (
+        <LotHistoryModal
+          item={lotHistoryItem}
+          onClose={() => setLotHistoryItem(null)}
+          onNotify={onNotify}
         />
       ) : null}
     </div>
@@ -697,7 +720,10 @@ function EditItemModal({ item, onClose, onSaved, onNotify }) {
     itemName: item.item_name,
     purchasePrice: item.purchase_price,
     defaultSellingPrice: item.default_selling_price,
-    supplier: item.supplier || ''
+    supplier: item.supplier || '',
+    baseUnit: item.base_unit || 'PCS',
+    boxUnit: item.box_unit || 'KARDUS',
+    qtyPerBox: item.qty_per_box || item.isi_per_kardus || 1
   })
   const [message, setMessage] = useState('')
 
@@ -734,14 +760,23 @@ function EditItemModal({ item, onClose, onSaved, onNotify }) {
             <Field label="Nama Barang">
               <Input required value={form.itemName} onChange={(e) => setForm({ ...form, itemName: e.target.value })} />
             </Field>
-            <Field label="Harga Beli">
+            <Field label={`Harga Beli per ${form.baseUnit}`}>
               <Input required type="number" min="0" value={form.purchasePrice} onChange={(e) => setForm({ ...form, purchasePrice: e.target.value })} />
             </Field>
-            <Field label="Harga Jual Default">
+            <Field label={`Harga Jual Default per ${form.baseUnit}`}>
               <Input required type="number" min="0" value={form.defaultSellingPrice} onChange={(e) => setForm({ ...form, defaultSellingPrice: e.target.value })} />
             </Field>
             <Field label="Supplier">
               <Input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} />
+            </Field>
+            <Field label="Satuan Dasar (misal: PCS, BTL, KG)">
+              <Input required value={form.baseUnit} onChange={(e) => setForm({ ...form, baseUnit: e.target.value.toUpperCase() })} />
+            </Field>
+            <Field label="Satuan Kardus (misal: KARDUS, DOS, PACK)">
+              <Input required value={form.boxUnit} onChange={(e) => setForm({ ...form, boxUnit: e.target.value.toUpperCase() })} />
+            </Field>
+            <Field label={`Isi per ${form.boxUnit || 'Kardus'}`}>
+              <Input required type="number" min="1" value={form.qtyPerBox} onChange={(e) => setForm({ ...form, qtyPerBox: e.target.value })} />
             </Field>
           </div>
           {message ? <p className="text-sm text-brand-secondary">{message}</p> : null}
@@ -755,18 +790,130 @@ function EditItemModal({ item, onClose, onSaved, onNotify }) {
   )
 }
 
+function LotHistoryModal({ item, onClose, onNotify }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    window.api.inventory.lotHistory(item.item_code)
+      .then(setData)
+      .catch((err) => {
+        onNotify('error', getUserErrorMessage(err))
+        onClose()
+      })
+      .finally(() => setLoading(false))
+  }, [item.item_code])
+
+  const lots = data?.lots || []
+  const activeLots = lots.filter((l) => l.qty_remaining > 0)
+  const baseUnit = item.base_unit || 'PCS'
+
+  const columns = [
+    {
+      key: 'arrival_date',
+      header: 'Tanggal Masuk',
+      render: (row) => row.arrival_date || '-'
+    },
+    {
+      key: 'input_qty',
+      header: 'Input Asal',
+      render: (row) => row.input_qty && row.input_unit
+        ? `${row.input_qty} ${row.input_unit}`
+        : `${row.qty_initial} ${baseUnit}`
+    },
+    {
+      key: 'qty_initial',
+      header: `Qty Masuk (${baseUnit})`,
+      render: (row) => row.qty_initial
+    },
+    {
+      key: 'qty_remaining',
+      header: 'Sisa',
+      render: (row) => (
+        <span className={row.qty_remaining === 0 ? 'text-ui-muted' : 'font-medium'}>
+          {row.qty_remaining} {baseUnit}
+        </span>
+      )
+    },
+    {
+      key: 'purchase_price',
+      header: `Harga Beli/${baseUnit}`,
+      render: (row) => formatRupiah(row.purchase_price)
+    },
+    {
+      key: 'sell_price',
+      header: `Harga Jual/${baseUnit}`,
+      render: (row) => {
+        const price = row.sell_price_per_base ?? row.sell_price_at_receipt
+        return price != null ? formatRupiah(price) : '-'
+      }
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => row.qty_remaining > 0
+        ? <span className="rounded-full bg-brand-secondary/10 px-2 py-0.5 text-xs font-medium text-brand-secondary">Aktif</span>
+        : <span className="rounded-full bg-ui-border px-2 py-0.5 text-xs font-medium text-ui-muted">Habis</span>
+    }
+  ]
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ui-text/40 p-4 sm:p-6">
+      <Card className="max-h-[90vh] w-full max-w-4xl overflow-auto">
+        <div className="space-y-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold">Riwayat Lot — {item.item_name}</h2>
+              <p className="text-sm text-ui-muted">{item.item_code} · Stok saat ini: <strong>{item.current_stock} {baseUnit}</strong></p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={onClose} aria-label="Tutup">
+              <X size={18} />
+            </Button>
+          </div>
+
+          {!loading && lots.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <CompactStat label="Total Lot" value={lots.length} />
+              <CompactStat label="Lot Aktif (ada sisa)" value={activeLots.length} />
+              <CompactStat
+                label="Rata-rata Harga Beli"
+                value={activeLots.length
+                  ? formatRupiah(Math.round(activeLots.reduce((s, l) => s + l.purchase_price * l.qty_remaining, 0) / activeLots.reduce((s, l) => s + l.qty_remaining, 0)))
+                  : '-'}
+              />
+            </div>
+          )}
+
+          <Table
+            columns={columns}
+            rows={lots}
+            getRowKey={(row) => row.id}
+            loading={loading}
+            emptyMessage="Belum ada data lot untuk barang ini."
+          />
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 function StockInModal({ onClose, onSaved, onNotify }) {
   const today = new Date().toISOString().slice(0, 10)
-  const [form, setForm] = useState({
+  const emptyForm = {
     itemCode: '',
     itemName: '',
-    purchasePrice: '',
-    qty: '',
+    buyPrice: '',
+    inputQty: '',
     defaultSellingPrice: '',
     supplier: '',
     description: '',
-    businessDate: today
-  })
+    businessDate: today,
+    baseUnit: 'PCS',
+    boxUnit: 'KARDUS',
+    qtyPerBox: 1,
+    inputUnit: 'PCS'
+  }
+  const [form, setForm] = useState(emptyForm)
   const [items, setItems] = useState([])
   const [message, setMessage] = useState('')
   const [showItemSuggestions, setShowItemSuggestions] = useState(false)
@@ -782,23 +929,52 @@ function StockInModal({ onClose, onSaved, onNotify }) {
     : []
 
   function selectExistingItem(item) {
+    const baseUnit = item.base_unit || 'PCS'
+    const boxUnit = item.box_unit || 'KARDUS'
+    const qtyPerBox = item.qty_per_box || item.isi_per_kardus || 1
     setForm({
       ...form,
       itemCode: item.item_code,
       itemName: item.item_name,
-      purchasePrice: item.purchase_price,
+      buyPrice: item.purchase_price,
       defaultSellingPrice: item.default_selling_price,
-      supplier: item.supplier || ''
+      supplier: item.supplier || '',
+      baseUnit,
+      boxUnit,
+      qtyPerBox,
+      inputUnit: baseUnit
     })
     setShowItemSuggestions(false)
   }
+
+  function handleUnitToggle(unit) {
+    if (unit === form.inputUnit) return
+    const qtyPerBox = Number(form.qtyPerBox) || 1
+    const isNewBox = unit === form.boxUnit
+    const isCurrentBox = form.inputUnit === form.boxUnit
+    let newBuy = Number(form.buyPrice) || 0
+    let newSell = Number(form.defaultSellingPrice) || 0
+    if (!isCurrentBox && isNewBox) {
+      newBuy = newBuy * qtyPerBox
+      newSell = newSell * qtyPerBox
+    } else if (isCurrentBox && !isNewBox) {
+      newBuy = Math.round(newBuy / qtyPerBox)
+      newSell = Math.round(newSell / qtyPerBox)
+    }
+    setForm({ ...form, inputUnit: unit, buyPrice: newBuy || '', defaultSellingPrice: newSell || '' })
+  }
+
+  const isBoxUnit = form.inputUnit === form.boxUnit
+  const baseQtyPreview = isBoxUnit && form.inputQty && form.qtyPerBox
+    ? Number(form.inputQty) * Number(form.qtyPerBox)
+    : null
 
   async function submit(event) {
     event.preventDefault()
     setMessage('')
     try {
       await window.api.inventory.stockIn(form)
-      setForm({ itemCode: '', itemName: '', purchasePrice: '', qty: '', defaultSellingPrice: '', supplier: '', description: '', businessDate: today })
+      setForm(emptyForm)
       setMessage('Stok masuk berhasil disimpan.')
       onNotify('success', 'Stok masuk berhasil disimpan.')
       await onSaved()
@@ -821,13 +997,17 @@ function StockInModal({ onClose, onSaved, onNotify }) {
             </Button>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Tanggal Transaksi"><Input required type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} /></Field>
+            <Field label="Tanggal Transaksi">
+              <Input required type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} />
+            </Field>
             <div className="relative space-y-1.5 text-sm font-medium">
               <span>Kode Barang</span>
               <Input
                 required
                 value={form.itemCode}
+                placeholder="Ketik atau pilih kode barang"
                 onFocus={() => setShowItemSuggestions(true)}
+                onBlur={() => window.setTimeout(() => setShowItemSuggestions(false), 120)}
                 onChange={(e) => {
                   setForm({ ...form, itemCode: e.target.value })
                   setShowItemSuggestions(true)
@@ -839,23 +1019,80 @@ function StockInModal({ onClose, onSaved, onNotify }) {
                     <button
                       type="button"
                       key={item.item_code}
-                      className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-ui-bg"
+                      className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-ui-bg focus:bg-ui-bg focus:outline-none"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => selectExistingItem(item)}
                     >
                       <span className="font-medium">{item.item_code}</span>
-                      <span className="text-ui-muted">{item.item_name} - stok {item.current_stock}</span>
+                      <span className="text-ui-muted">
+                        {item.item_name} — stok {item.current_stock} {item.base_unit || 'PCS'}
+                      </span>
                     </button>
                   ))}
                 </div>
               ) : null}
             </div>
-            <Field label="Nama Barang"><Input required value={form.itemName} onChange={(e) => setForm({ ...form, itemName: e.target.value })} /></Field>
-            <Field label="Harga Beli"><Input required type="number" min="0" value={form.purchasePrice} onChange={(e) => setForm({ ...form, purchasePrice: e.target.value })} /></Field>
-            <Field label="Qty"><Input required type="number" min="1" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} /></Field>
-            <Field label="Harga Jual Default"><Input required type="number" min="0" value={form.defaultSellingPrice} onChange={(e) => setForm({ ...form, defaultSellingPrice: e.target.value })} /></Field>
-            <Field label="Supplier"><Input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></Field>
+
+            <Field label="Nama Barang">
+              <Input required value={form.itemName} onChange={(e) => setForm({ ...form, itemName: e.target.value })} />
+            </Field>
+            <Field label="Supplier">
+              <Input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} />
+            </Field>
+
+            <div className="space-y-2">
+              <Field label="Satuan">
+                <Select value={form.inputUnit} onChange={(e) => handleUnitToggle(e.target.value)}>
+                  <option value={form.baseUnit}>{form.baseUnit} — Eceran</option>
+                  <option value={form.boxUnit}>{form.boxUnit} — Kardus</option>
+                </Select>
+              </Field>
+              {isBoxUnit && (
+                <label className="block space-y-1.5 text-sm">
+                  <span className="text-ui-muted">1 {form.boxUnit} = berapa {form.baseUnit}?</span>
+                  <Input
+                    required
+                    type="number"
+                    min="1"
+                    value={form.qtyPerBox}
+                    onChange={(e) => setForm({ ...form, qtyPerBox: e.target.value })}
+                  />
+                </label>
+              )}
+            </div>
+
+            <div className="space-y-1.5 text-sm font-medium">
+              <span>Qty ({form.inputUnit})</span>
+              <Input required type="number" min="1" value={form.inputQty} onChange={(e) => setForm({ ...form, inputQty: e.target.value })} />
+              {baseQtyPreview ? (
+                <p className="text-xs text-ui-muted">= {baseQtyPreview} {form.baseUnit} masuk ke stok</p>
+              ) : null}
+            </div>
+
+            <div className="space-y-1.5 text-sm font-medium">
+              <span>Harga Beli per {form.inputUnit}</span>
+              <Input required type="number" min="0" value={form.buyPrice} onChange={(e) => setForm({ ...form, buyPrice: e.target.value })} />
+              {isBoxUnit && form.buyPrice && form.qtyPerBox ? (
+                <p className="text-xs text-ui-muted">
+                  = {formatRupiah(Math.round(Number(form.buyPrice) / Number(form.qtyPerBox)))} per {form.baseUnit}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-1.5 text-sm font-medium">
+              <span>Harga Jual Default per {form.inputUnit}</span>
+              <Input required type="number" min="0" value={form.defaultSellingPrice} onChange={(e) => setForm({ ...form, defaultSellingPrice: e.target.value })} />
+              {isBoxUnit && form.defaultSellingPrice && form.qtyPerBox ? (
+                <p className="text-xs text-ui-muted">
+                  = {formatRupiah(Math.round(Number(form.defaultSellingPrice) / Number(form.qtyPerBox)))} per {form.baseUnit}
+                </p>
+              ) : null}
+            </div>
           </div>
-          <Field label="Catatan"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+
+          <Field label="Catatan">
+            <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          </Field>
           {message ? <p className="text-sm text-brand-secondary">{message}</p> : null}
           <div className="flex justify-end gap-3 pt-3">
             <Button variant="ghost" onClick={onClose}>Batal</Button>
@@ -910,12 +1147,27 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
 
   function selectItem(rowId, itemCode) {
     const item = items.find((entry) => entry.item_code === itemCode)
+    const baseUnit = item?.base_unit || 'PCS'
     updateStockOutRow(rowId, {
       itemCode,
       itemSearch: item ? formatItemLabel(item) : '',
-      unitPrice: item?.default_selling_price || '',
+      sellPrice: item?.default_selling_price || '',
+      inputUnit: baseUnit,
       showItemOptions: false
     })
+  }
+
+  function handleRowUnitToggle(rowId, newUnit) {
+    const row = form.items.find((r) => r.id === rowId)
+    const selectedItem = items.find((item) => item.item_code === row?.itemCode)
+    const boxUnit = selectedItem?.box_unit || 'KARDUS'
+    const qtyPerBox = selectedItem?.qty_per_box || selectedItem?.isi_per_kardus || 1
+    const isNewBox = newUnit === boxUnit
+    const isCurrentBox = row?.inputUnit === boxUnit
+    let newPrice = Number(row?.sellPrice) || 0
+    if (!isCurrentBox && isNewBox) newPrice = newPrice * qtyPerBox
+    else if (isCurrentBox && !isNewBox) newPrice = Math.round(newPrice / qtyPerBox)
+    updateStockOutRow(rowId, { inputUnit: newUnit, sellPrice: newPrice || '' })
   }
 
   function addStockOutRow() {
@@ -947,14 +1199,37 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
     setShowStoreOptions(false)
   }
 
+  function getRowBaseQty(row) {
+    const item = items.find((i) => i.item_code === row.itemCode)
+    if (!item || !row.inputQty) return 0
+    const qtyPerBox = item.qty_per_box || item.isi_per_kardus || 1
+    const isBox = row.inputUnit === (item.box_unit || 'KARDUS')
+    return isBox ? Number(row.inputQty) * qtyPerBox : Number(row.inputQty)
+  }
+
+  const hasOverStock = form.items.some((row) => {
+    if (!row.itemCode || !row.inputQty) return false
+    const item = items.find((i) => i.item_code === row.itemCode)
+    return item ? getRowBaseQty(row) > item.current_stock : false
+  })
+
   async function submit(event) {
     event.preventDefault()
     setMessage('')
     try {
       if (!form.storeId) throw new Error('Toko wajib dipilih')
+      for (const row of form.items) {
+        if (!row.itemCode || !row.inputQty) continue
+        const item = items.find((i) => i.item_code === row.itemCode)
+        if (!item) continue
+        const baseQty = getRowBaseQty(row)
+        if (baseQty > item.current_stock) {
+          throw new Error(`Stok ${item.item_name} tidak mencukupi (tersedia: ${item.current_stock} ${item.base_unit || 'PCS'})`)
+        }
+      }
       const payload = {
         ...form,
-        items: form.items.map(({ itemCode, unitPrice, qty }) => ({ itemCode, unitPrice, qty }))
+        items: form.items.map(({ itemCode, sellPrice, inputQty, inputUnit }) => ({ itemCode, sellPrice, inputQty, inputUnit }))
       }
       await window.api.inventory.stockOut(payload)
       setForm({ items: [createStockOutRow()], storeId: '', ownerName: '', storeName: '', phoneNumber: '', description: '', businessDate: today })
@@ -1040,8 +1315,19 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
                 )
               })
               .slice(0, 80)
+
+            const qtyPerBox = selectedItem?.qty_per_box || selectedItem?.isi_per_kardus || 1
+            const isBoxRow = row.inputUnit === (selectedItem?.box_unit || 'KARDUS')
+            const baseQtyNeeded = row.inputQty && selectedItem
+              ? (isBoxRow ? Number(row.inputQty) * qtyPerBox : Number(row.inputQty))
+              : 0
+            const isOverStock = selectedItem && Number(row.inputQty) > 0 && baseQtyNeeded > selectedItem.current_stock
+            const maxInputQty = selectedItem
+              ? (isBoxRow ? Math.floor(selectedItem.current_stock / qtyPerBox) : selectedItem.current_stock)
+              : null
+
             return (
-              <div key={row.id} className="grid gap-3 rounded-ui border border-ui-border bg-ui-bg p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.7fr)_0.6fr_0.9fr_0.8fr_auto] xl:items-end">
+              <div key={row.id} className={['grid gap-3 rounded-ui border p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.5fr)_0.6fr_0.7fr_0.7fr_0.8fr_auto] xl:items-start', isOverStock ? 'border-brand-danger bg-brand-danger/5' : 'border-ui-border bg-ui-bg'].join(' ')}>
                 <div className="relative space-y-1.5 text-sm font-medium">
                   <span>Barang</span>
                   <div className="relative">
@@ -1054,7 +1340,7 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
                       onChange={(event) => updateStockOutRow(row.id, {
                         itemSearch: event.target.value,
                         itemCode: '',
-                        unitPrice: '',
+                        sellPrice: '',
                         showItemOptions: true
                       })}
                     />
@@ -1073,7 +1359,7 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
                           >
                             <span className="font-medium text-ui-text">{item.item_code} - {item.item_name}</span>
                             <span className="text-xs text-ui-muted">
-                              Stok {item.current_stock}{item.supplier ? ` - ${item.supplier}` : ''}
+                              Stok {item.current_stock} {item.base_unit || 'PCS'}{item.supplier ? ` - ${item.supplier}` : ''}
                             </span>
                           </button>
                         ))
@@ -1083,26 +1369,68 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
                     </div>
                   ) : null}
                 </div>
-                <Field label="Stok">
-                  <Input disabled value={selectedItem?.current_stock ?? ''} />
-                </Field>
-                <Field label="Qty">
-                  <Input required type="number" min="1" value={row.qty} onChange={(e) => updateStockOutRow(row.id, { qty: e.target.value })} />
-                </Field>
-                <Field label="Harga Jual">
-                  <Input required type="number" min="0" value={row.unitPrice} onChange={(e) => updateStockOutRow(row.id, { unitPrice: e.target.value })} />
-                </Field>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="mb-0.5 h-10 w-10 px-0 text-brand-danger hover:text-brand-danger"
-                  disabled={form.items.length === 1}
-                  title="Hapus item"
-                  onClick={() => removeStockOutRow(row.id)}
-                >
-                  <Trash2 size={16} />
-                </Button>
+                <div className="space-y-1.5 text-sm font-medium">
+                  <span>Stok</span>
+                  <Input disabled value={selectedItem ? `${selectedItem.current_stock} ${selectedItem.base_unit || 'PCS'}` : ''} />
+                </div>
+                <div className="space-y-1.5 text-sm font-medium">
+                  <span>Satuan</span>
+                  <Select
+                    value={row.inputUnit}
+                    onChange={(e) => handleRowUnitToggle(row.id, e.target.value)}
+                    disabled={!row.itemCode}
+                  >
+                    <option value={selectedItem?.base_unit || 'PCS'}>
+                      {selectedItem?.base_unit || 'PCS'} — Eceran
+                    </option>
+                    <option value={selectedItem?.box_unit || 'KARDUS'}>
+                      {selectedItem?.box_unit || 'KARDUS'} — Kardus
+                    </option>
+                  </Select>
+                </div>
+                <div className="space-y-1.5 text-sm font-medium">
+                  <span>Qty ({row.inputUnit})</span>
+                  <Input
+                    required
+                    type="number"
+                    min="1"
+                    value={row.inputQty}
+                    className={isOverStock ? 'border-brand-danger focus-visible:ring-brand-danger/30' : ''}
+                    onChange={(e) => updateStockOutRow(row.id, { inputQty: e.target.value })}
+                  />
+                  {isOverStock ? (
+                    <p className="text-xs font-medium text-brand-danger">
+                      Melebihi stok! Maks {maxInputQty} {row.inputUnit}
+                    </p>
+                  ) : isBoxRow && row.inputQty && selectedItem ? (
+                    <p className="text-xs text-ui-muted">
+                      = {baseQtyNeeded} {selectedItem.base_unit || 'PCS'}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="space-y-1.5 text-sm font-medium">
+                  <span>Harga Jual/{row.inputUnit}</span>
+                  <Input required type="number" min="0" value={row.sellPrice} onChange={(e) => updateStockOutRow(row.id, { sellPrice: e.target.value })} />
+                  {row.inputUnit === (selectedItem?.box_unit || 'KARDUS') && row.sellPrice && selectedItem ? (
+                    <p className="text-xs text-ui-muted">
+                      = {formatRupiah(Math.round(Number(row.sellPrice) / (selectedItem.qty_per_box || selectedItem.isi_per_kardus || 1)))} per {selectedItem.base_unit || 'PCS'}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="space-y-1.5 text-sm font-medium">
+                  <span className="invisible select-none">-</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-10 w-10 px-0 text-brand-danger hover:text-brand-danger"
+                    disabled={form.items.length === 1}
+                    title="Hapus item"
+                    onClick={() => removeStockOutRow(row.id)}
+                  >
+                    <Trash2 size={16} />
+                  </Button>
+                </div>
               </div>
             )
           })}
@@ -1110,7 +1438,10 @@ function StockOutPage({ modal = false, onClose, onSaved, onNotify } = {}) {
       </div>
       <Field label="Catatan"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
       <div className="pt-2">
-        <Button type="submit">Simpan Mutasi Keluar</Button>
+        <Button type="submit" disabled={hasOverStock}>Simpan Mutasi Keluar</Button>
+        {hasOverStock ? (
+          <p className="mt-2 text-xs text-brand-danger">Perbaiki qty yang melebihi stok sebelum menyimpan.</p>
+        ) : null}
       </div>
     </>
   )
@@ -1153,6 +1484,8 @@ function LogsPage({ onNotify, onConfirm }) {
   const [showMutationForm, setShowMutationForm] = useState(false)
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
+  const [storeFilterSearch, setStoreFilterSearch] = useState('')
+  const [showStoreFilter, setShowStoreFilter] = useState(false)
 
   async function loadLogs(nextFilters = filters) {
     setLoading(true)
@@ -1177,6 +1510,32 @@ function LogsPage({ onNotify, onConfirm }) {
   const activeLogs = logs.filter((log) => !log.canceled_at)
   const paginatedLogs = paginateRows(activeLogs, page, pageSize)
 
+  function selectStoreFilter(storeId) {
+    const store = stores.find((s) => String(s.id) === String(storeId))
+    const label = store ? (store.store_name || store.owner_name) : ''
+    setFilters((f) => ({ ...f, storeId }))
+    setStoreFilterSearch(label)
+    setShowStoreFilter(false)
+  }
+
+  function clearStoreFilter() {
+    setFilters((f) => ({ ...f, storeId: 'ALL' }))
+    setStoreFilterSearch('')
+    setShowStoreFilter(false)
+  }
+
+  const filteredStoreOptions = stores
+    .filter((store) => {
+      const kw = storeFilterSearch.toLowerCase()
+      if (!kw) return true
+      return (
+        store.owner_name.toLowerCase().includes(kw) ||
+        String(store.store_name || '').toLowerCase().includes(kw) ||
+        String(store.phone_number || '').toLowerCase().includes(kw)
+      )
+    })
+    .slice(0, 60)
+
   async function exportExcel() {
     setMessage('')
     try {
@@ -1195,9 +1554,30 @@ function LogsPage({ onNotify, onConfirm }) {
     { key: 'mutation_type', header: 'Jenis' },
     { key: 'item_code', header: 'Kode' },
     { key: 'item_name', header: 'Nama Barang' },
-    { key: 'qty', header: 'Qty' },
-    { key: 'cost_price', header: 'Harga Beli', render: (row) => formatRupiah(row.cost_price) },
-    { key: 'unit_price', header: 'Harga Jual', render: (row) => formatRupiah(row.unit_price) },
+    {
+      key: 'qty',
+      header: 'Qty Input',
+      render: (row) => {
+        const inputQty = row.input_qty
+        const inputUnit = row.input_unit
+        const baseQty = row.base_qty || row.qty
+        if (inputQty && inputUnit && inputQty !== baseQty) {
+          return `${inputQty} ${inputUnit} (${baseQty} pcs)`
+        }
+        return `${baseQty} ${inputUnit || 'PCS'}`
+      }
+    },
+    {
+      key: 'cost_price',
+      header: 'Modal/HPP',
+      render: (row) => {
+        if (row.mutation_type === 'OUT') {
+          return row.cogs_total != null ? formatRupiah(row.cogs_total) : formatRupiah(row.cost_price * row.qty)
+        }
+        return formatRupiah(row.buy_price_per_base || row.cost_price)
+      }
+    },
+    { key: 'unit_price', header: 'Harga Jual/PCS', render: (row) => row.mutation_type === 'OUT' ? formatRupiah(row.sell_price_per_base || row.unit_price) : '-' },
     { key: 'owner_name', header: 'Owner', render: (row) => row.owner_name || '-' },
     { key: 'store_name', header: 'Toko', render: (row) => row.store_name || row.owner_name || '-' },
     { key: 'operator_name', header: 'Operator' },
@@ -1296,16 +1676,52 @@ function LogsPage({ onNotify, onConfirm }) {
             <Field label="Sampai Tanggal">
               <Input type="date" value={filters.toDate} onChange={(e) => setFilters({ ...filters, toDate: e.target.value })} />
             </Field>
-            <Field label="Filter Toko">
-              <Select value={filters.storeId} onChange={(e) => setFilters({ ...filters, storeId: e.target.value })}>
-                <option value="ALL">Semua toko</option>
-                {stores.map((store) => (
-                  <option key={store.id} value={store.id}>
-                    {store.store_name || store.owner_name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+            <div className="relative space-y-1.5 text-sm font-medium">
+              <span>Filter Toko</span>
+              <div className="relative">
+                <Input
+                  value={storeFilterSearch}
+                  placeholder="Semua toko"
+                  onFocus={() => setShowStoreFilter(true)}
+                  onBlur={() => window.setTimeout(() => setShowStoreFilter(false), 120)}
+                  onChange={(e) => {
+                    setStoreFilterSearch(e.target.value)
+                    setShowStoreFilter(true)
+                    if (!e.target.value) setFilters((f) => ({ ...f, storeId: 'ALL' }))
+                  }}
+                />
+                <Search size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ui-muted" />
+              </div>
+              {showStoreFilter && (
+                <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-ui border border-ui-border bg-ui-surface py-1 shadow-ui">
+                  <button
+                    type="button"
+                    className={['flex w-full px-3 py-2 text-left text-sm hover:bg-ui-bg focus:outline-none', filters.storeId === 'ALL' ? 'font-medium text-ui-text' : 'text-ui-muted'].join(' ')}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={clearStoreFilter}
+                  >
+                    Semua toko
+                  </button>
+                  {filteredStoreOptions.length > 0
+                    ? filteredStoreOptions.map((store) => (
+                        <button
+                          type="button"
+                          key={store.id}
+                          className={['flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm hover:bg-ui-bg focus:outline-none', String(filters.storeId) === String(store.id) ? 'bg-ui-bg' : ''].join(' ')}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectStoreFilter(String(store.id))}
+                        >
+                          <span className="font-medium text-ui-text">{store.store_name || store.owner_name}</span>
+                          <span className="text-xs text-ui-muted">
+                            {store.owner_name}{store.phone_number ? ` · ${store.phone_number}` : ''}
+                          </span>
+                        </button>
+                      ))
+                    : <div className="px-3 py-3 text-sm text-ui-muted">Toko tidak ditemukan.</div>
+                  }
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </Card>
@@ -1685,8 +2101,9 @@ function createStockOutRow() {
     itemCode: '',
     itemSearch: '',
     showItemOptions: false,
-    unitPrice: '',
-    qty: ''
+    sellPrice: '',
+    inputQty: '',
+    inputUnit: 'PCS'
   }
 }
 
@@ -1850,18 +2267,28 @@ function formatPeriodLabel(range) {
 
 function buildSummary(logs, items = []) {
   const activeLogs = logs.filter((log) => !log.canceled_at)
-  const totalIn = activeLogs.filter((log) => log.mutation_type === 'IN').reduce((sum, log) => sum + log.qty, 0)
+  const totalIn = activeLogs.filter((log) => log.mutation_type === 'IN').reduce((sum, log) => sum + (log.base_qty || log.qty), 0)
   const outLogs = activeLogs.filter((log) => log.mutation_type === 'OUT')
-  const totalOut = outLogs.reduce((sum, log) => sum + log.qty, 0)
-  const turnover = outLogs.reduce((sum, log) => sum + log.qty * log.unit_price, 0)
-  const profit = outLogs.reduce((sum, log) => sum + (log.unit_price - log.cost_price) * log.qty, 0)
+  const totalOut = outLogs.reduce((sum, log) => sum + (log.base_qty || log.qty), 0)
+  const turnover = outLogs.reduce((sum, log) => {
+    const qty = log.base_qty || log.qty
+    const price = log.sell_price_per_base || log.unit_price
+    return sum + qty * price
+  }, 0)
+  const profit = outLogs.reduce((sum, log) => {
+    const qty = log.base_qty || log.qty
+    const revenue = (log.sell_price_per_base || log.unit_price) * qty
+    const cogs = log.cogs_total != null ? log.cogs_total : (log.cost_price * qty)
+    return sum + (revenue - cogs)
+  }, 0)
   const stockOnHand = items.reduce((sum, item) => sum + item.current_stock, 0)
   const dailyMap = new Map()
   const itemMap = new Map()
 
   outLogs.forEach((log) => {
     const date = log.display_date || log.created_at.slice(0, 10)
-    dailyMap.set(date, (dailyMap.get(date) || 0) + log.qty)
+    const qty = log.base_qty || log.qty
+    dailyMap.set(date, (dailyMap.get(date) || 0) + qty)
 
     const itemCode = log.item_code
     const current = itemMap.get(itemCode) || {
@@ -1869,7 +2296,7 @@ function buildSummary(logs, items = []) {
       itemName: log.item_name || itemCode,
       qty: 0
     }
-    current.qty += log.qty
+    current.qty += qty
     itemMap.set(itemCode, current)
   })
 

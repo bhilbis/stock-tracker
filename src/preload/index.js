@@ -14,7 +14,8 @@ const channels = {
     updateItem: 'inventory:update-item',
     stockIn: 'inventory:stock-in',
     stockOut: 'inventory:stock-out',
-    cancelStockOut: 'inventory:cancel-stock-out'
+    cancelStockOut: 'inventory:cancel-stock-out',
+    lotHistory: 'inventory:lot-history'
   },
   logs: {
     list: 'logs:list',
@@ -55,7 +56,8 @@ contextBridge.exposeInMainWorld('api', {
     updateItem: (payload) => invoke(channels.inventory.updateItem, payload),
     stockIn: (payload) => invoke(channels.inventory.stockIn, payload),
     stockOut: (payload) => invoke(channels.inventory.stockOut, payload),
-    cancelStockOut: (payload) => invoke(channels.inventory.cancelStockOut, payload)
+    cancelStockOut: (payload) => invoke(channels.inventory.cancelStockOut, payload),
+    lotHistory: (itemCode) => invoke(channels.inventory.lotHistory, itemCode)
   },
   logs: {
     list: (filters) => invoke(channels.logs.list, filters),

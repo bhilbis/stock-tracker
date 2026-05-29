@@ -28,15 +28,25 @@ export function registerInventoryHandlers(ipcMain, db) {
     assertPermission('manage_stock_out')
     return service.cancelStockOut(normalizeCancelStockOut(payload), getActiveUser())
   })
+
+  ipcMain.handle('inventory:lot-history', (_event, itemCode) => {
+    assertAnyPermission(['view_dashboard', 'manage_stock_in', 'manage_stock_out'])
+    if (typeof itemCode !== 'string' || !itemCode.trim()) throw new Error('Kode barang wajib diisi')
+    return service.getLotHistory(itemCode.trim())
+  })
 }
 
 function normalizeStockIn(payload) {
   return {
     itemCode: requiredString(payload.itemCode, 'Kode barang wajib diisi'),
     itemName: requiredString(payload.itemName, 'Nama barang wajib diisi'),
-    purchasePrice: requiredNumber(payload.purchasePrice, 'Harga beli wajib valid'),
-    qty: positiveInteger(payload.qty, 'Qty wajib lebih dari 0'),
+    inputQty: positiveInteger(payload.inputQty ?? payload.qty, 'Qty wajib lebih dari 0'),
+    inputUnit: requiredString(payload.inputUnit ?? payload.unitType ?? 'PCS', 'Satuan wajib diisi'),
+    buyPrice: requiredNumber(payload.buyPrice ?? payload.purchasePrice, 'Harga beli wajib valid'),
     defaultSellingPrice: requiredNumber(payload.defaultSellingPrice, 'Harga jual wajib valid'),
+    baseUnit: requiredString(payload.baseUnit || 'PCS', 'Satuan dasar wajib diisi'),
+    boxUnit: requiredString(payload.boxUnit || 'KARDUS', 'Satuan kardus wajib diisi'),
+    qtyPerBox: positiveInteger(payload.qtyPerBox || 1, 'Isi per kardus wajib lebih dari 0'),
     supplier: optionalString(payload.supplier),
     description: optionalString(payload.description),
     businessDate: requiredDate(payload.businessDate, 'Tanggal transaksi wajib valid')
@@ -70,8 +80,9 @@ function normalizeStockOut(payload) {
 function normalizeStockOutItem(item) {
   return {
     itemCode: requiredString(item.itemCode, 'Kode barang wajib diisi'),
-    qty: positiveInteger(item.qty, 'Qty wajib lebih dari 0'),
-    unitPrice: requiredNumber(item.unitPrice, 'Harga jual wajib valid')
+    inputQty: positiveInteger(item.inputQty ?? item.qty, 'Qty wajib lebih dari 0'),
+    sellPrice: requiredNumber(item.sellPrice ?? item.unitPrice, 'Harga jual wajib valid'),
+    inputUnit: requiredString(item.inputUnit ?? item.unitType ?? 'PCS', 'Satuan wajib diisi')
   }
 }
 
@@ -81,7 +92,10 @@ function normalizeUpdateItem(payload) {
     itemName: requiredString(payload.itemName, 'Nama barang wajib diisi'),
     purchasePrice: requiredNumber(payload.purchasePrice, 'Harga beli wajib valid'),
     defaultSellingPrice: requiredNumber(payload.defaultSellingPrice, 'Harga jual wajib valid'),
-    supplier: optionalString(payload.supplier)
+    supplier: optionalString(payload.supplier),
+    baseUnit: requiredString(payload.baseUnit || 'PCS', 'Satuan dasar wajib diisi'),
+    boxUnit: requiredString(payload.boxUnit || 'KARDUS', 'Satuan kardus wajib diisi'),
+    qtyPerBox: positiveInteger(payload.qtyPerBox || 1, 'Isi per kardus wajib lebih dari 0')
   }
 }
 

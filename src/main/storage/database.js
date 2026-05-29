@@ -14,6 +14,10 @@ export function initializeDatabase(userDataPath) {
       purchase_price INTEGER NOT NULL DEFAULT 0,
       default_selling_price INTEGER NOT NULL DEFAULT 0,
       supplier TEXT,
+      isi_per_kardus INTEGER NOT NULL DEFAULT 1,
+      base_unit TEXT NOT NULL DEFAULT 'PCS',
+      box_unit TEXT NOT NULL DEFAULT 'KARDUS',
+      qty_per_box INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -35,10 +39,17 @@ export function initializeDatabase(userDataPath) {
       qty INTEGER NOT NULL CHECK (qty > 0),
       cost_price INTEGER NOT NULL DEFAULT 0,
       unit_price INTEGER NOT NULL DEFAULT 0,
+      input_qty INTEGER,
+      input_unit TEXT,
+      base_qty INTEGER,
+      buy_price_per_base INTEGER,
+      sell_price_per_base INTEGER,
+      cogs_total INTEGER,
       description TEXT,
       operator_name TEXT NOT NULL,
       operator_role TEXT NOT NULL,
       business_date TEXT,
+      unit_type TEXT NOT NULL DEFAULT 'eceran',
       canceled_at TEXT,
       canceled_by TEXT,
       cancel_reason TEXT,
@@ -51,6 +62,7 @@ export function initializeDatabase(userDataPath) {
     CREATE INDEX IF NOT EXISTS idx_stock_logs_created_at ON stock_logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_stock_logs_mutation_type ON stock_logs(mutation_type);
     CREATE INDEX IF NOT EXISTS idx_stock_logs_store_id ON stock_logs(store_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_logs_business_date ON stock_logs(business_date);
 
     CREATE TABLE IF NOT EXISTS inventory_lots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +79,17 @@ export function initializeDatabase(userDataPath) {
 
     CREATE INDEX IF NOT EXISTS idx_inventory_lots_item_code ON inventory_lots(item_code);
     CREATE INDEX IF NOT EXISTS idx_inventory_lots_remaining ON inventory_lots(item_code, qty_remaining);
+
+    CREATE TABLE IF NOT EXISTS lot_consumptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      log_id INTEGER NOT NULL,
+      lot_id INTEGER NOT NULL,
+      qty_consumed INTEGER NOT NULL,
+      FOREIGN KEY (log_id) REFERENCES stock_logs(id),
+      FOREIGN KEY (lot_id) REFERENCES inventory_lots(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lot_consumptions_log_id ON lot_consumptions(log_id);
 
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,26 +129,45 @@ export function initializeDatabase(userDataPath) {
 
 function runMigrations(db) {
   const stockLogColumns = db.prepare('PRAGMA table_info(stock_logs)').all()
-  if (!stockLogColumns.some((column) => column.name === 'business_date')) {
+  const stockLogColNames = new Set(stockLogColumns.map((c) => c.name))
+
+  if (!stockLogColNames.has('business_date')) {
     db.exec('ALTER TABLE stock_logs ADD COLUMN business_date TEXT')
     db.exec("UPDATE stock_logs SET business_date = substr(created_at, 1, 10) WHERE business_date IS NULL")
   }
-
-  const refreshedStockLogColumns = db.prepare('PRAGMA table_info(stock_logs)').all()
-  if (!refreshedStockLogColumns.some((column) => column.name === 'canceled_at')) {
-    db.exec('ALTER TABLE stock_logs ADD COLUMN canceled_at TEXT')
+  if (!stockLogColNames.has('canceled_at')) db.exec('ALTER TABLE stock_logs ADD COLUMN canceled_at TEXT')
+  if (!stockLogColNames.has('canceled_by')) db.exec('ALTER TABLE stock_logs ADD COLUMN canceled_by TEXT')
+  if (!stockLogColNames.has('cancel_reason')) db.exec('ALTER TABLE stock_logs ADD COLUMN cancel_reason TEXT')
+  if (!stockLogColNames.has('source_lot_id')) db.exec('ALTER TABLE stock_logs ADD COLUMN source_lot_id INTEGER')
+  if (!stockLogColNames.has('unit_type')) {
+    db.exec("ALTER TABLE stock_logs ADD COLUMN unit_type TEXT NOT NULL DEFAULT 'eceran'")
   }
-  if (!refreshedStockLogColumns.some((column) => column.name === 'canceled_by')) {
-    db.exec('ALTER TABLE stock_logs ADD COLUMN canceled_by TEXT')
-  }
-  if (!refreshedStockLogColumns.some((column) => column.name === 'cancel_reason')) {
-    db.exec('ALTER TABLE stock_logs ADD COLUMN cancel_reason TEXT')
-  }
-  if (!refreshedStockLogColumns.some((column) => column.name === 'source_lot_id')) {
-    db.exec('ALTER TABLE stock_logs ADD COLUMN source_lot_id INTEGER')
-  }
+  if (!stockLogColNames.has('input_qty')) db.exec('ALTER TABLE stock_logs ADD COLUMN input_qty INTEGER')
+  if (!stockLogColNames.has('input_unit')) db.exec('ALTER TABLE stock_logs ADD COLUMN input_unit TEXT')
+  if (!stockLogColNames.has('base_qty')) db.exec('ALTER TABLE stock_logs ADD COLUMN base_qty INTEGER')
+  if (!stockLogColNames.has('buy_price_per_base')) db.exec('ALTER TABLE stock_logs ADD COLUMN buy_price_per_base INTEGER')
+  if (!stockLogColNames.has('sell_price_per_base')) db.exec('ALTER TABLE stock_logs ADD COLUMN sell_price_per_base INTEGER')
+  if (!stockLogColNames.has('cogs_total')) db.exec('ALTER TABLE stock_logs ADD COLUMN cogs_total INTEGER')
 
   db.exec('CREATE INDEX IF NOT EXISTS idx_stock_logs_business_date ON stock_logs(business_date)')
+
+  const inventoryColumns = db.prepare('PRAGMA table_info(inventory)').all()
+  const inventoryColNames = new Set(inventoryColumns.map((c) => c.name))
+
+  if (!inventoryColNames.has('isi_per_kardus')) {
+    db.exec('ALTER TABLE inventory ADD COLUMN isi_per_kardus INTEGER NOT NULL DEFAULT 1')
+  }
+  if (!inventoryColNames.has('base_unit')) {
+    db.exec("ALTER TABLE inventory ADD COLUMN base_unit TEXT NOT NULL DEFAULT 'PCS'")
+  }
+  if (!inventoryColNames.has('box_unit')) {
+    db.exec("ALTER TABLE inventory ADD COLUMN box_unit TEXT NOT NULL DEFAULT 'KARDUS'")
+  }
+  if (!inventoryColNames.has('qty_per_box')) {
+    db.exec('ALTER TABLE inventory ADD COLUMN qty_per_box INTEGER NOT NULL DEFAULT 1')
+    db.exec('UPDATE inventory SET qty_per_box = COALESCE(isi_per_kardus, 1) WHERE qty_per_box = 1')
+  }
+
   backfillInventoryLots(db)
 }
 
@@ -183,11 +225,7 @@ function backfillInventoryLots(db) {
           const usedQty = Math.min(remaining, lot.qty_remaining)
           db.prepare('UPDATE inventory_lots SET qty_remaining = qty_remaining - @usedQty WHERE id = @id')
             .run({ usedQty, id: lot.id })
-          consumptions.push({
-            lotId: lot.id,
-            qty: usedQty,
-            purchasePrice: lot.purchase_price
-          })
+          consumptions.push({ lotId: lot.id, qty: usedQty, purchasePrice: lot.purchase_price })
           remaining -= usedQty
         }
 
@@ -195,9 +233,7 @@ function backfillInventoryLots(db) {
           const [firstConsumption, ...extraConsumptions] = consumptions
           db.prepare(`
             UPDATE stock_logs
-            SET qty = @qty,
-                cost_price = @costPrice,
-                source_lot_id = @sourceLotId
+            SET qty = @qty, cost_price = @costPrice, source_lot_id = @sourceLotId
             WHERE id = @id
           `).run({
             qty: firstConsumption.qty,
